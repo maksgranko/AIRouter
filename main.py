@@ -1,26 +1,33 @@
 import os
+from dotenv import load_dotenv # Импортируем load_dotenv
 from fastapi import FastAPI, Request, UploadFile, HTTPException
 from registry import ModuleRegistry
 from modules.openai_module import OpenAIChatModule
 from modules.gemini_module import GeminiChatModule
 from api_key_manager import ApiKeyManager
 from proxy_manager import ProxyManager
-import admin_router # Импортируем роутер админ-панели
+import admin_router
+
+# Загружаем переменные окружения из .env файла (если он есть)
+# Это должно быть сделано до того, как переменные окружения используются,
+# например, в ProxyManager или admin_router.
+load_dotenv() 
 
 app = FastAPI()
 registry = ModuleRegistry()
 
-# Инициализация менеджеров
+# Инициализация менеджеров ПОСЛЕ load_dotenv(), чтобы они могли использовать переменные из .env
 key_manager = ApiKeyManager({
     "openai": "openai_keys.json",
     "gemini": "gemini_keys.json"
 })
-proxy_manager = ProxyManager(proxy_file_path="proxies.json")
+# ProxyManager уже читает переменные окружения в своем __init__
+proxy_manager = ProxyManager(proxy_file_path="proxies.json") 
 
 # Сохраняем менеджеры и реестр модулей в состоянии приложения для доступа из роутеров
 app.state.key_manager = key_manager
 app.state.proxy_manager = proxy_manager
-app.state.module_registry = registry # Добавляем registry в app.state
+app.state.module_registry = registry
 
 # Регистрация модулей API
 # Мы передаем менеджер ключей в модули, чтобы они могли запрашивать и ротировать ключи.
