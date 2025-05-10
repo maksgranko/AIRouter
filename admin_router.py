@@ -36,13 +36,16 @@ async def get_current_username(credentials: HTTPBasicCredentials = Depends(secur
 
 @router.get("/dashboard", name="admin_dashboard") # Добавляем name для url_for
 async def admin_dashboard_view(request: Request, username: str = Depends(get_current_username)):
-    key_manager = request.app.state.key_manager
-    key_manager = request.app.state.key_manager
+    key_manager = request.app.state.key_manager # Исправлено дублирование
     proxy_manager = request.app.state.proxy_manager
-    module_registry = request.app.state.module_registry # Получаем registry
+    module_registry = request.app.state.module_registry
     
     proxy_status_text = "Включено" if proxy_manager.active else "Выключено"
     
+    service_api_keys_info = {}
+    for service_name_iter in key_manager.key_files.keys(): # Используем другое имя переменной
+        service_api_keys_info[service_name_iter] = key_manager.api_keys.get(service_name_iter, [])
+
     context = {
         "request": request,
         "username": username,
@@ -51,13 +54,18 @@ async def admin_dashboard_view(request: Request, username: str = Depends(get_cur
         "current_proxy_rotation_mode": proxy_manager.proxy_rotation_mode_env, 
         "initial_use_proxies_env": str(proxy_manager.use_proxies_env).lower(), 
         "initial_proxy_rotation_mode_env": os.getenv("PROXY_ROTATION_MODE", "once").lower(), 
+        
         "openai_keys_file": key_manager.key_files.get("openai", "N/A"),
         "openai_keys_count": len(key_manager.api_keys.get("openai", [])),
         "gemini_keys_file": key_manager.key_files.get("gemini", "N/A"),
         "gemini_keys_count": len(key_manager.api_keys.get("gemini", [])),
+        
+        "service_api_keys": service_api_keys_info,
+
         "proxies_file": proxy_manager.proxy_file_path,
         "proxies_count": len(proxy_manager.proxies),
-        "module_statuses": module_registry.get_all_module_statuses() # Передаем статусы модулей
+        "current_proxies_list": proxy_manager.proxies, # Передаем список прокси
+        "module_statuses": module_registry.get_all_module_statuses()
     }
     return templates.TemplateResponse("admin_dashboard.html", context)
 
@@ -90,3 +98,57 @@ async def update_module_status_form(
     module_registry.set_module_active(module_name, module_status_bool)
     
     return RedirectResponse(url=router.url_path_for("admin_dashboard_view"), status_code=status.HTTP_303_SEE_OTHER)
+
+@router.post("/dashboard/keys", name="manage_api_key")
+async def manage_api_key_form(
+    request: Request,
+    service_name: str = Form(...),
+    api_key: str = Form(...), # Для add_key это новый ключ, для remove_key это ключ для удаления
+    action: str = Form(...) 
+):
+    key_manager = request.app.state.key_manager
+    
+    if action == "add_key":
+        if api_key and api_key.strip(): # Проверяем, что ключ не пустой
+            key_manager.add_key(service_name, api_key.strip())
+        # Можно добавить flash-сообщение об успехе/ошибке
+    elif action == "remove_key":
+        key_manager.remove_key(service_name, api_key) # api_key здесь - это ключ для удаления
+        
+    return RedirectResponse(url=router.url_path_for("admin_dashboard_view"), status_code=status.HTTP_303_SEE_OTHER)
+
+@router.post("/dashboard/proxies", name="manage_proxy_list")
+async def manage_proxy_list_form(
+    request: Request,
+    action: str = Form(...),
+    new_proxy_type: Optional[str] = Form(None),
+    new_proxy_url: Optional[str] = Form(None),
+    proxy_url: Optional[str] = Form(None) # URL прокси для удаления
+):
+    proxy_manager = request.app.state.proxy_manager
+    
+    if action == "add_proxy":
+        if new_proxy_type and new_proxy_url and new_proxy_url.strip():
+            proxy_manager.add_proxy(new_proxy_type, new_proxy_url.strip())
+        # Можно добавить flash-сообщение
+    elif action == "remove_proxy" and proxy_url:
+        proxy_manager.remove_proxy(proxy_url)
+    elif action == "reload_proxies":
+        proxy_manager.reload_proxies()
+        
+    return RedirectResponse(url=router.url_path_for("admin_dashboard_view"), status_code=status.HTTP_303_SEE_OTHER)
+
+@router.get("/help", name="admin_help")
+async def admin_help_view(request: Request, username: str = Depends(get_current_username)):
+    # Можно передать какие-либо динамические данные в справку, если нужно
+    # Например, актуальные имена файлов конфигурации
+    key_manager = request.app.state.key_manager
+    proxy_manager = request.app.state.proxy_manager
+    context = {
+        "request": request,
+        "username": username,
+        "openai_keys_file": key_manager.key_files.get("openai", "openai_keys.json"),
+        "gemini_keys_file": key_manager.key_files.get("gemini", "gemini_keys.json"),
+        "proxies_file": proxy_manager.proxy_file_path,
+    }
+    return templates.TemplateResponse("admin_help.html", context)

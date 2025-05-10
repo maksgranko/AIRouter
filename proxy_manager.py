@@ -157,12 +157,111 @@ class ProxyManager:
         else:
             logger.warning(f"Invalid proxy rotation mode: {mode}. Mode not changed. Allowed: 'once', 'cycle'.")
 
+    def _save_proxies_to_file(self) -> bool:
+        """Сохраняет текущий список прокси в JSON-файл."""
+        if not self.proxy_file_path: # На случай, если путь не задан (хотя он задается в __init__)
+            logger.error("Cannot save proxies: proxy_file_path is not defined.")
+            return False
+        
+        # Мы сохраняем self.proxies, который является List[ProxyConfig]
+        # ProxyConfig - это TypedDict, который при сериализации в JSON станет обычным dict.
+        try:
+            with open(self.proxy_file_path, 'w') as f:
+                json.dump(self.proxies, f, indent=2)
+            logger.info(f"Successfully saved {len(self.proxies)} proxies to {self.proxy_file_path}")
+            return True
+        except Exception as e:
+            logger.error(f"Error saving proxies to {self.proxy_file_path}: {e}")
+            return False
+
+    def add_proxy(self, proxy_type: str, proxy_url: str) -> bool:
+        """Добавляет новый прокси в список и сохраняет в файл."""
+        if not proxy_type or not proxy_url:
+            logger.error("Invalid proxy type or URL provided.")
+            return False
+        
+        new_proxy = ProxyConfig(type=proxy_type.lower(), url=proxy_url.strip())
+
+        # Проверка на дубликаты (по URL)
+        if any(p['url'] == new_proxy['url'] for p in self.proxies):
+            logger.warning(f"Proxy with URL '{new_proxy['url']}' already exists. Not adding.")
+            return False
+
+        self.proxies.append(new_proxy)
+        logger.info(f"Added proxy: {new_proxy}. Total proxies: {len(self.proxies)}")
+        
+        # Если менеджер не был активен из-за отсутствия прокси, но теперь прокси есть и USE_PROXIES=true
+        if not self.active and self.use_proxies_env and self.proxies:
+            self.active = True
+            if self.current_proxy_index == -1 : # Если это первый добавленный прокси
+                 self.current_proxy_index = 0
+            logger.info("ProxyManager became active after adding a proxy.")
+        elif self.active and self.current_proxy_index == -1 and len(self.proxies) == 1:
+            # Если был активен, но список был пуст (например, все удалили), и добавили первый
+            self.current_proxy_index = 0
+
+
+        return self._save_proxies_to_file()
+
+    def remove_proxy(self, proxy_url_to_remove: str) -> bool:
+        """Удаляет прокси по URL из списка и сохраняет в файл."""
+        if not self.proxies:
+            logger.warning("No proxies to remove.")
+            return False
+
+        initial_len = len(self.proxies)
+        # Сохраняем текущий выбранный прокси, если он есть
+        current_selected_proxy_obj = self.get_proxy()
+
+        self.proxies = [p for p in self.proxies if p['url'] != proxy_url_to_remove]
+
+        if len(self.proxies) < initial_len:
+            logger.info(f"Removed proxy with URL '{proxy_url_to_remove}'. Remaining proxies: {len(self.proxies)}")
+            
+            if not self.proxies: # Если все прокси удалены
+                self.current_proxy_index = -1
+                # self.active остается True, если use_proxies_env=True, но get_proxy() вернет None
+                logger.info("All proxies removed.")
+            elif current_selected_proxy_obj and current_selected_proxy_obj['url'] == proxy_url_to_remove:
+                # Если удалили текущий выбранный прокси, сбрасываем индекс на начало
+                self.reset_proxies() # reset_proxies установит current_proxy_index = 0
+            elif self.current_proxy_index >= len(self.proxies):
+                 # Если удалили прокси перед текущим, и индекс стал невалидным
+                 self.current_proxy_index = 0 if self.proxies else -1
+
+
+            return self._save_proxies_to_file()
+        else:
+            logger.warning(f"Proxy with URL '{proxy_url_to_remove}' not found.")
+            return False
+            
+    def reload_proxies(self):
+        """Перезагружает список прокси из файла."""
+        logger.info(f"Reloading proxies from {self.proxy_file_path}...")
+        self.proxies = []
+        self.current_proxy_index = -1
+        # self.active будет обновлен в _load_proxies в зависимости от use_proxies_env и наличия прокси
+        initial_active_state = self.active 
+        self.active = False # Временно деактивируем перед загрузкой
+
+        if self.use_proxies_env:
+            self._load_proxies()
+            if self.proxies:
+                self.active = True
+                logger.info(f"Proxies reloaded. Active: {self.active}, Count: {len(self.proxies)}, Mode: {self.proxy_rotation_mode_env}")
+            else:
+                # self.active остается False, если прокси не загрузились
+                logger.warning("Proxies reloaded, but no proxies found or file error. ProxyManager remains inactive or becomes inactive.")
+        else: # Если USE_PROXIES=false, то менеджер не должен быть активен
+            self.active = False
+            logger.info("Proxies reloaded, but USE_PROXIES is false. ProxyManager remains disabled.")
+
 
 # Пример использования (для тестирования)
 if __name__ == '__main__':
     # Установка переменных окружения для теста
-    # os.environ["USE_PROXIES"] = "true" # Закомментировано, чтобы проверить поведение по умолчанию
-    # os.environ["PROXY_ROTATION_MODE"] = "cycle" 
+    # os.environ["USE_PROXIES"] = "true" 
+    # os.environ["PROXY_ROTATION_MODE"] = "cycle"
 
     # Создаем временный файл прокси для теста
     temp_proxy_file = "temp_proxies.json"

@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Справка - Панель Администратора</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
+        .container { background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        h1, h2, h3 { color: #333; }
+        h2 { border-bottom: 1px solid #eee; padding-bottom: 5px;}
+        p, li { line-height: 1.6; }
+        code { background-color: #e9ecef; padding: 2px 5px; border-radius: 3px; font-family: monospace; white-space: pre-wrap; }
+        .nav-link { margin-top: 20px; display: inline-block; padding: 8px 15px; background-color: #007bff; color: white; text-decoration: none; border-radius: 4px; }
+        .nav-link:hover { background-color: #0056b3; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; margin-bottom: 15px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f0f0f0; }
+        pre { background-color: #e9ecef; padding: 10px; border-radius: 4px; overflow-x: auto; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Справка по Панели Администратора и Конфигурации Роутера</h1>
+        <p><a href="{{ url_for('admin_dashboard_view') }}" class="nav-link">Вернуться на Дашборд</a></p>
+
+        <h2>Использование Роутера как OpenAI-Совместимого API</h2>
+        <p>Данный роутер предоставляет эндпоинты, совместимые с OpenAI API. Это означает, что вы можете использовать существующие клиенты и библиотеки, предназначенные для работы с OpenAI, направив их на адрес этого роутера.</p>
+        <h3>Основные Эндпоинты</h3>
+        <ul>
+            <li><code>/v1/chat/completions</code> - для запросов к чат-моделям.</li>
+            <li><code>/v1/completions</code> - для запросов к моделям дополнения текста (legacy).</li>
+            <li><code>/v1/embeddings</code> - для получения векторных представлений текста.</li>
+            <li><code>/v1/models</code> - для получения списка доступных моделей от активных модулей.</li>
+            <li><code>/v1/models/{model_id}</code> - для получения информации о конкретной модели.</li>
+            <li>Другие эндпоинты, такие как <code>/v1/moderations</code>, <code>/v1/images/generations</code>, <code>/v1/audio/transcriptions</code>, <code>/v1/audio/translations</code>, также реализованы и будут работать, если соответствующий модуль их поддерживает.</li>
+        </ul>
+        <h3>Отправка Запросов</h3>
+        <p>При отправке запроса, например, к <code>/v1/chat/completions</code>, важно указать параметр <code>model</code> в теле JSON-запроса. Этот параметр определяет, какой из подключенных модулей (и какая конкретная модель внутри этого модуля, если применимо) будет обрабатывать запрос.</p>
+        <ul>
+            <li>Для использования модуля OpenAI: <code>"model": "openai"</code> или <code>"model": "openai/gpt-3.5-turbo"</code> (если модуль OpenAI зарегистрирован с именем "openai"). Роутер попытается найти модуль по полному имени или по имени сервиса.</li>
+            <li>Для использования модуля Gemini: <code>"model": "gemini"</code> или <code>"model": "gemini/gemini-pro"</code>.</li>
+            <li>Если параметр <code>model</code> не указан, по умолчанию будет использован сервис <code>openai</code>.</li>
+        </ul>
+        <p>Роутер <strong>не требует</strong> API ключа для доступа к своим эндпоинтам. Аутентификация происходит на уровне самих AI-сервисов (OpenAI, Gemini), ключи для которых управляются данным роутером.</p>
+        <h3>Пример запроса с использованием <code>curl</code></h3>
+        <pre><code>
+curl http://127.0.0.1:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "openai", 
+    "messages": [
+      {
+        "role": "user",
+        "content": "Привет, как дела?"
+      }
+    ]
+  }'
+        </code></pre>
+        <p>Замените <code>"openai"</code> на <code>"gemini"</code> или другой идентификатор модели/сервиса, чтобы направить запрос соответствующему модулю.</p>
+
+        <h2>Переменные Окружения</h2>
+        <p>Эти переменные устанавливаются перед запуском приложения и определяют его базовое поведение. Изменения через UI для некоторых из этих настроек (прокси) действуют только до перезапуска.</p>
+        <table>
+            <thead>
+                <tr><th>Переменная</th><th>Описание</th><th>Значения по умолчанию</th></tr>
+            </thead>
+            <tbody>
+                <tr><td><code>ADMIN_USERNAME</code></td><td>Логин для доступа к панели администратора.</td><td><code>admin</code></td></tr>
+                <tr><td><code>ADMIN_PASSWORD</code></td><td>Пароль для доступа к панели администратора.</td><td><code>supersecret</code></td></tr>
+                <tr><td><code>USE_PROXIES</code></td><td>Включает (true) или выключает (false) использование прокси-серверов.</td><td><code>true</code></td></tr>
+                <tr><td><code>PROXY_ROTATION_MODE</code></td><td>Режим ротации прокси: <code>once</code> (однократный обход списка) или <code>cycle</code> (циклический обход).</td><td><code>once</code></td></tr>
+            </tbody>
+        </table>
+
+        <h2>Файлы Конфигурации</h2>
+        <p>Эти файлы хранят списки ключей и прокси. Их можно редактировать напрямую или через панель администратора.</p>
+        <ul>
+            <li><strong><code>openai_keys.json</code></strong>: Список API ключей для OpenAI. Формат: JSON-массив строк. <br>Пример: <code>["sk-xxxx", "sk-yyyy"]</code></li>
+            <li><strong><code>gemini_keys.json</code></strong>: Список API ключей для Gemini. Формат: JSON-массив строк. <br>Пример: <code>["ai-xxxx", "ai-yyyy"]</code></li>
+            <li><strong><code>proxies.json</code></strong>: Список прокси-серверов. Формат: JSON-массив объектов. <br>Каждый объект: <code>{"type": "http|socks4|socks5", "url": "protocol://user:pass@host:port"}</code>. <br>Пример: <code>[{"type": "http", "url": "http://proxy.example.com:8080"}, {"type": "socks5", "url": "socks5://user:pass@another.proxy:1080"}]</code></li>
+        </ul>
+
+        <h2>Управление через Панель Администратора</h2>
+        <h3>Настройки Прокси</h3>
+        <ul>
+            <li><strong>Использование прокси</strong>: Позволяет временно (до перезапуска) включить или выключить использование всех прокси-серверов. Исходное значение берется из <code>USE_PROXIES</code>.</li>
+            <li><strong>Режим ротации прокси</strong>: Позволяет временно (до перезапуска) изменить режим ротации. Исходное значение из <code>PROXY_ROTATION_MODE</code>.</li>
+        </ul>
+        <h3>Управление API Ключами</h3>
+        <ul>
+            <li>Отображает ключи для каждого сервиса (<code>openai</code>, <code>gemini</code>).</li>
+            <li>Позволяет добавлять новые ключи и удалять существующие.</li>
+            <li>Изменения немедленно сохраняются в соответствующие <code>.json</code> файлы и применяются в приложении.</li>
+        </ul>
+        <h3>Управление Прокси-серверами</h3>
+        <ul>
+            <li>Отображает список прокси из <code>proxies.json</code>.</li>
+            <li>Позволяет добавлять новые прокси (тип: http, https, socks4, socks5; URL).</li>
+            <li>Позволяет удалять существующие прокси.</li>
+            <li>Кнопка "Перезагрузить список прокси из файла" позволяет применить изменения, сделанные в <code>proxies.json</code> вручную, без перезапуска всего приложения.</li>
+            <li>Изменения (кроме перезагрузки) немедленно сохраняются в <code>proxies.json</code> и применяются.</li>
+        </ul>
+        <h3>Управление Модулями (Сервисами)</h3>
+        <ul>
+            <li>Позволяет включать или выключать каждый зарегистрированный модуль (сервис).</li>
+            <li>Отключенный модуль не будет доступен для API запросов (например, <code>/v1/chat/completions</code> не сможет использовать модели этого сервиса, а <code>/v1/models</code> не будет их показывать).</li>
+            <li>Изменения действуют до перезапуска приложения.</li>
+        </ul>
+
+        <h2>Логика Ротации</h2>
+        <p>Приложение использует следующую логику при выполнении запросов к API:</p>
+        <ol>
+            <li>Берется текущий API ключ для запрошенного сервиса.</li>
+            <li>Если прокси включены (<code>USE_PROXIES=true</code> и есть загруженные прокси):
+                <ul>
+                    <li>Берется текущий прокси из списка.</li>
+                    <li>Выполняется запрос.
+                        <ul>
+                            <li>При успехе - возвращается результат.</li>
+                            <li>При ошибке ключа (аутентификация, права) - переход к шагу 3 (смена ключа).</li>
+                            <li>При ошибке сети/соединения или лимита запросов - попытка сменить прокси (согласно <code>PROXY_ROTATION_MODE</code>). Если прокси закончились (в режиме <code>once</code>) или ротация выключена - переход к шагу 3 (смена ключа).</li>
+                        </ul>
+                    </li>
+                </ul>
+            </li>
+            <li>Если прокси выключены:
+                <ul>
+                    <li>Выполняется прямой запрос.</li>
+                    <li>При успехе - возвращается результат.</li>
+                    <li>При любой ошибке (ключ, лимит, сеть) - переход к шагу 3 (смена ключа).</li>
+                </ul>
+            </li>
+            <li>Смена API ключа: берется следующий ключ из списка для данного сервиса.
+                <ul>
+                    <li>Если ключи закончились - возвращается ошибка клиенту.</li>
+                    <li>Если новый ключ получен - список прокси сбрасывается на начало, и происходит возврат к шагу 2.</li>
+                </ul>
+            </li>
+        </ol>
+
+        <p><a href="{{ url_for('admin_dashboard_view') }}" class="nav-link">Вернуться на Дашборд</a></p>
+    </div>
+</body>
+</html>

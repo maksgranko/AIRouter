@@ -66,7 +66,80 @@
             <span class="setting-value">{{ proxies_file }} (Загружено: {{ proxies_count }} прокси)</span>
         </div>
         <div class="instructions">
-            <p>Редактирование этих файлов напрямую изменит конфигурацию ключей и прокси.</p>
+            <p>Файлы конфигурации: <code>{{ openai_keys_file }}</code>, <code>{{ gemini_keys_file }}</code>, <code>{{ proxies_file }}</code>.</p>
+            <p>Изменения ключей и прокси через эту панель напрямую перезаписывают эти файлы.</p>
+        </div>
+        
+        <h2>Управление API Ключами</h2>
+        {% for service_name, keys in service_api_keys.items() %}
+        <div class="setting">
+            <h3 style="color: #333;">Ключи для сервиса: {{ service_name }}</h3>
+            {% if keys %}
+                <ul style="list-style-type: none; padding-left: 0;">
+                {% for key in keys %}
+                    <li style="margin-bottom: 5px; display: flex; justify-content: space-between; align-items: center;">
+                        <span style="word-break: break-all; margin-right: 10px;">{{ key }}</span>
+                        <form action="{{ url_for('manage_api_key') }}" method="post" style="display: inline;">
+                            <input type="hidden" name="service_name" value="{{ service_name }}">
+                            <input type="hidden" name="api_key" value="{{ key }}">
+                            <button type="submit" name="action" value="remove_key" onclick="return confirm('Вы уверены, что хотите удалить этот ключ?');">Удалить</button>
+                        </form>
+                    </li>
+                {% endfor %}
+                </ul>
+            {% else %}
+                <p>Нет ключей для этого сервиса.</p>
+            {% endif %}
+            <form action="{{ url_for('manage_api_key') }}" method="post" style="margin-top: 10px;">
+                <input type="hidden" name="service_name" value="{{ service_name }}">
+                <label for="new_api_key_{{ service_name }}">Новый ключ:</label>
+                <input type="text" id="new_api_key_{{ service_name }}" name="api_key" required size="50">
+                <button type="submit" name="action" value="add_key">Добавить ключ</button>
+            </form>
+        </div>
+        {% endfor %}
+        <div class="instructions">
+            <p>Добавление или удаление ключей обновляет соответствующие JSON-файлы и перезагружает конфигурацию ключей в приложении.</p>
+        </div>
+
+        <h2>Управление Прокси-серверами</h2>
+        <div class="setting">
+            <h3 style="color: #333;">Список прокси (из файла: {{ proxies_file }})</h3>
+            {% if current_proxies_list %}
+                <ul style="list-style-type: none; padding-left: 0;">
+                {% for proxy_item in current_proxies_list %}
+                    <li style="margin-bottom: 5px; display: flex; justify-content: space-between; align-items: center;">
+                        <span style="word-break: break-all; margin-right: 10px;">[{{ proxy_item.type }}] {{ proxy_item.url }}</span>
+                        <form action="{{ url_for('manage_proxy_list') }}" method="post" style="display: inline;">
+                            <input type="hidden" name="proxy_url" value="{{ proxy_item.url }}">
+                            <button type="submit" name="action" value="remove_proxy" onclick="return confirm('Вы уверены, что хотите удалить этот прокси?');">Удалить</button>
+                        </form>
+                    </li>
+                {% endfor %}
+                </ul>
+            {% else %}
+                <p>Нет прокси в списке.</p>
+            {% endif %}
+            <form action="{{ url_for('manage_proxy_list') }}" method="post" style="margin-top: 10px;">
+                <label for="new_proxy_type" class="setting-name">Тип нового прокси:</label>
+                <select name="new_proxy_type" id="new_proxy_type">
+                    <option value="http">HTTP</option>
+                    <option value="https">HTTPS (указывайте как http в URL)</option>
+                    <option value="socks4">SOCKS4</option>
+                    <option value="socks5">SOCKS5</option>
+                </select>
+                <br>
+                <label for="new_proxy_url" class="setting-name">URL нового прокси (например, http://user:pass@host:port):</label>
+                <input type="text" id="new_proxy_url" name="new_proxy_url" required size="70">
+                <br>
+                <button type="submit" name="action" value="add_proxy" style="margin-top: 5px;">Добавить прокси</button>
+            </form>
+             <form action="{{ url_for('manage_proxy_list') }}" method="post" style="margin-top:15px;">
+                <button type="submit" name="action" value="reload_proxies">Перезагрузить список прокси из файла</button>
+            </form>
+        </div>
+        <div class="instructions">
+            <p>Добавление или удаление прокси обновляет файл <code>{{ proxies_file }}</code> и перезагружает конфигурацию прокси в приложении.</p>
         </div>
 
         <h2>Управление Модулями (Сервисами)</h2>
