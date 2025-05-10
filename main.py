@@ -17,9 +17,10 @@ key_manager = ApiKeyManager({
 })
 proxy_manager = ProxyManager(proxy_file_path="proxies.json")
 
-# Сохраняем менеджеры в состоянии приложения для доступа из роутеров
+# Сохраняем менеджеры и реестр модулей в состоянии приложения для доступа из роутеров
 app.state.key_manager = key_manager
 app.state.proxy_manager = proxy_manager
+app.state.module_registry = registry # Добавляем registry в app.state
 
 # Регистрация модулей API
 # Мы передаем менеджер ключей в модули, чтобы они могли запрашивать и ротировать ключи.
@@ -92,22 +93,75 @@ async def embeddings(request: Request):
 @app.get("/v1/models")
 async def list_models():
     all_models = []
-    for mod in registry.all():
+    # Используем all_active_modules, чтобы получать модели только от включенных сервисов
+    for mod in registry.all_active_modules(): 
         try:
             models = await mod.list_models()
             all_models.extend(models.get("data", []))
-        except Exception:
+        except Exception: # Общая обработка ошибок, чтобы один модуль не сломал весь эндпоинт
             continue
     return {"object": "list", "data": all_models}
 
 @app.get("/v1/models/{model_id}")
 async def retrieve_model(model_id: str):
-    for mod in registry.all():
-        try:
-            return await mod.retrieve_model(model_id)
-        except NotImplementedError:
-            continue
-    return {"error": f"Model {model_id} not found."}
+    # При получении конкретной модели, мы должны проверить все зарегистрированные модули,
+    # но registry.get() уже учитывает статус активности.
+    # Однако, если модель запрашивается по ID, который может принадлежать неактивному модулю,
+    # то get_module() не найдет его.
+    # Логика здесь должна быть такой: найти модуль, которому принадлежит model_id,
+    # и если этот модуль активен, то вызвать retrieve_model.
+    # Это сложнее, т.к. model_id не содержит имени сервиса.
+    # Пока оставим как есть, но это потенциальное место для улучшения:
+    # возможно, retrieve_model должен перебирать all_registered_modules и проверять активность перед вызовом.
+    # Или же, если модель запрашивается, она должна быть от активного модуля.
+    # Текущая реализация get_module() в других эндпоинтах уже проверяет активность.
+    # Для /v1/models/{model_id} нужно решить, как определять модуль.
+    # Простой вариант: если модель запрашивают, она должна быть доступна через активный модуль.
+    # Поэтому, если мы не можем получить модуль через registry.get(model_id) или registry.get(service_part_of_model_id),
+    # то модель не найдена или ее сервис неактивен.
+
+    # Попробуем извлечь имя сервиса из model_id, если оно там есть (например, "openai/gpt-4")
+    parts = model_id.split('/')
+    service_to_try = parts[0] if len(parts) > 1 else None
+
+    # Сначала пытаемся по полному ID (если модуль зарегистрирован так)
+    try:
+        module = registry.get(model_id)
+        return await module.retrieve_model(model_id)
+    except KeyError:
+        # Если не получилось, и есть сервисная часть, пробуем по ней
+        if service_to_try:
+            try:
+                module = registry.get(service_to_try)
+                # Убедимся, что запрашиваемая модель действительно принадлежит этому модулю
+                # (это упрощенная проверка, в реальности может быть сложнее)
+                # Например, модуль OpenAI может обслуживать много моделей.
+                # Мы просто передаем model_id дальше, модуль сам разберется.
+                return await module.retrieve_model(model_id)
+            except KeyError:
+                pass # Модуль сервиса не найден или неактивен
+        
+        # Если ничего не помогло, перебираем все активные модули (менее эффективно)
+        # Это может быть нужно, если model_id не содержит префикса сервиса
+        for mod in registry.all_active_modules():
+            try:
+                # Предполагаем, что retrieve_model вернет ошибку, если модель не его
+                # или выбросит NotImplementedError, если не поддерживает метод
+                retrieved = await mod.retrieve_model(model_id)
+                # Проверим, что это не стандартный ответ "не реализовано" от BaseModule
+                if isinstance(retrieved, dict) and retrieved.get("object") == "model": # Успешное получение
+                    return retrieved
+            except NotImplementedError:
+                continue
+            except HTTPException as e: # Если модуль вернул ошибку, что модель не найдена у него
+                if e.status_code == 404 or "not found" in str(e.detail).lower(): # Примерная проверка
+                    continue
+                raise # Другая ошибка HTTPException
+            except Exception: # Другие непредвиденные ошибки
+                continue
+                
+    return HTTPException(status_code=404, detail=f"Model '{model_id}' not found or its service is inactive.")
+
 
 @app.post("/v1/moderations")
 async def moderations(request: Request):

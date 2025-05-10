@@ -21,21 +21,35 @@
 
         <h2>Настройки Прокси</h2>
         <div class="setting">
-            <span class="setting-name">Использование прокси (USE_PROXIES):</span>
-            <span class="setting-value">{{ proxy_manager_active_status }}</span>
+            <form action="{{ url_for('update_proxy_settings') }}" method="post" style="display: inline-block; margin-right: 10px;">
+                <label for="use_proxies" class="setting-name">Использование прокси:</label>
+                <select name="use_proxies" id="use_proxies">
+                    <option value="true" {% if proxy_manager_is_active %}selected{% endif %}>Включено</option>
+                    <option value="false" {% if not proxy_manager_is_active %}selected{% endif %}>Выключено</option>
+                </select>
+                <button type="submit" name="action" value="set_use_proxies">Применить</button>
+            </form>
+            <br>
+            <small>Текущий статус: <span class="setting-value">{{ proxy_manager_active_status }}</span></small>
+             <small>(Исходная настройка из USE_PROXIES: {{ initial_use_proxies_env }})</small>
         </div>
+
         <div class="setting">
-            <span class="setting-name">Режим ротации прокси (PROXY_ROTATION_MODE):</span>
-            <span class="setting-value">{{ proxy_rotation_mode }}</span>
+            <form action="{{ url_for('update_proxy_settings') }}" method="post" style="display: inline-block;">
+                <label for="rotation_mode" class="setting-name">Режим ротации прокси:</label>
+                <select name="rotation_mode" id="rotation_mode">
+                    <option value="once" {% if current_proxy_rotation_mode == "once" %}selected{% endif %}>Однократный обход (once)</option>
+                    <option value="cycle" {% if current_proxy_rotation_mode == "cycle" %}selected{% endif %}>Циклический обход (cycle)</option>
+                </select>
+                <button type="submit" name="action" value="set_rotation_mode">Применить</button>
+            </form>
+            <br>
+            <small>Текущий режим: <span class="setting-value">{{ current_proxy_rotation_mode }}</span></small>
+            <small>(Исходная настройка из PROXY_ROTATION_MODE: {{ initial_proxy_rotation_mode_env }})</small>
         </div>
         
         <div class="instructions">
-            <p><strong>Для изменения этих настроек:</strong></p>
-            <ul>
-                <li><code>USE_PROXIES</code>: установите переменную окружения в <code>true</code> или <code>false</code>.</li>
-                <li><code>PROXY_ROTATION_MODE</code>: установите переменную окружения в <code>once</code> или <code>cycle</code>.</li>
-            </ul>
-            <p>После изменения переменных окружения перезапустите приложение.</p>
+            <p>Изменения, внесенные через эту панель, действуют до перезапуска приложения. Для постоянных изменений используйте переменные окружения <code>USE_PROXIES</code> и <code>PROXY_ROTATION_MODE</code>.</p>
         </div>
 
         <h2>Информация о Файлах Конфигурации</h2>
@@ -53,6 +67,29 @@
         </div>
         <div class="instructions">
             <p>Редактирование этих файлов напрямую изменит конфигурацию ключей и прокси.</p>
+        </div>
+
+        <h2>Управление Модулями (Сервисами)</h2>
+        {% if module_statuses %}
+            {% for module_name, status in module_statuses.items() %}
+            <div class="setting">
+                <form action="{{ url_for('update_module_status') }}" method="post" style="display: inline-block; margin-right: 10px;">
+                    <input type="hidden" name="module_name" value="{{ module_name }}">
+                    <label for="module_status_{{ module_name }}" class="setting-name">Модуль {{ module_name }}:</label>
+                    <select name="module_status" id="module_status_{{ module_name }}">
+                        <option value="true" {% if status %}selected{% endif %}>Включен</option>
+                        <option value="false" {% if not status %}selected{% endif %}>Выключен</option>
+                    </select>
+                    <button type="submit">Применить</button>
+                </form>
+                <small>Текущий статус: <span class="setting-value">{% if status %}Включен{% else %}Выключен{% endif %}</span></small>
+            </div>
+            {% endfor %}
+        {% else %}
+            <p>Нет зарегистрированных модулей для управления.</p>
+        {% endif %}
+        <div class="instructions">
+            <p>Отключение модуля сделает его недоступным для запросов через API.</p>
         </div>
 
     </div>

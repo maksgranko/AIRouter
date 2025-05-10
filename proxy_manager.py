@@ -129,12 +129,40 @@ class ProxyManager:
         current_proxy_url = self.get_proxy()['url'] if self.get_proxy() else 'None'
         logger.info(f"Proxy index reset. Current proxy: {current_proxy_url}")
 
+    def set_use_proxies(self, use_proxies: bool):
+        """Включает или выключает использование прокси во время выполнения."""
+        if use_proxies:
+            if not self.proxies: # Если список прокси пуст
+                self._load_proxies() # Попытка загрузить, если ранее не были загружены
+            
+            if self.proxies: # Если прокси есть (или были успешно загружены)
+                self.active = True
+                logger.info(f"Proxy usage enabled. Current mode: {self.proxy_rotation_mode_env}. Proxies available: {len(self.proxies)}")
+            else:
+                self.active = False # Не удалось загрузить прокси
+                logger.warning("Attempted to enable proxies, but no proxies are loaded. Proxies remain disabled.")
+        else:
+            self.active = False
+            logger.info("Proxy usage disabled.")
+        # Эта настройка не меняет self.use_proxies_env, которая отражает исходную настройку из окружения.
+        # Она меняет только текущее рабочее состояние self.active.
+
+    def set_rotation_mode(self, mode: str):
+        """Устанавливает режим ротации прокси во время выполнения."""
+        if mode in ["once", "cycle"]:
+            self.proxy_rotation_mode_env = mode # Перезаписываем значение из окружения для текущей сессии
+            logger.info(f"Proxy rotation mode set to: {self.proxy_rotation_mode_env}")
+            # При смене режима, имеет смысл сбросить текущий индекс, чтобы начать с начала списка
+            self.reset_proxies() 
+        else:
+            logger.warning(f"Invalid proxy rotation mode: {mode}. Mode not changed. Allowed: 'once', 'cycle'.")
+
 
 # Пример использования (для тестирования)
 if __name__ == '__main__':
     # Установка переменных окружения для теста
-    os.environ["USE_PROXIES"] = "true"
-    os.environ["PROXY_ROTATION_MODE"] = "cycle" # или "once"
+    # os.environ["USE_PROXIES"] = "true" # Закомментировано, чтобы проверить поведение по умолчанию
+    # os.environ["PROXY_ROTATION_MODE"] = "cycle" 
 
     # Создаем временный файл прокси для теста
     temp_proxy_file = "temp_proxies.json"
