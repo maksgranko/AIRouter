@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Панель Администратора</title>
+    <style>
+        body { font-family: sans-serif; margin: 20px; background-color: #f4f4f4; color: #333; }
+        .container { background-color: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+        h1 { color: #333; }
+        h2 { color: #555; border-bottom: 1px solid #eee; padding-bottom: 5px;}
+        .setting { margin-bottom: 15px; padding: 10px; border: 1px solid #ddd; border-radius: 4px; }
+        .setting-name { font-weight: bold; color: #0056b3; }
+        .setting-value { font-style: italic; color: #28a745; }
+        .instructions { margin-top: 20px; padding: 15px; background-color: #e9ecef; border-left: 3px solid #007bff; font-size: 0.9em;}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Панель Администратора</h1>
+
+        <h2>Настройки Прокси</h2>
+        <div class="setting">
+            <span class="setting-name">Использование прокси (USE_PROXIES):</span>
+            <span class="setting-value">{{ proxy_manager_active_status }}</span>
+        </div>
+        <div class="setting">
+            <span class="setting-name">Режим ротации прокси (PROXY_ROTATION_MODE):</span>
+            <span class="setting-value">{{ proxy_rotation_mode }}</span>
+        </div>
+        
+        <div class="instructions">
+            <p><strong>Для изменения этих настроек:</strong></p>
+            <ul>
+                <li><code>USE_PROXIES</code>: установите переменную окружения в <code>true</code> или <code>false</code>.</li>
+                <li><code>PROXY_ROTATION_MODE</code>: установите переменную окружения в <code>once</code> или <code>cycle</code>.</li>
+            </ul>
+            <p>После изменения переменных окружения перезапустите приложение.</p>
+        </div>
+
+        <h2>Информация о Файлах Конфигурации</h2>
+        <div class="setting">
+            <span class="setting-name">Файл API ключей OpenAI:</span>
+            <span class="setting-value">{{ openai_keys_file }} (Загружено: {{ openai_keys_count }} ключ(ей))</span>
+        </div>
+        <div class="setting">
+            <span class="setting-name">Файл API ключей Gemini:</span>
+            <span class="setting-value">{{ gemini_keys_file }} (Загружено: {{ gemini_keys_count }} ключ(ей))</span>
+        </div>
+        <div class="setting">
+            <span class="setting-name">Файл Прокси:</span>
+            <span class="setting-value">{{ proxies_file }} (Загружено: {{ proxies_count }} прокси)</span>
+        </div>
+        <div class="instructions">
+            <p>Редактирование этих файлов напрямую изменит конфигурацию ключей и прокси.</p>
+        </div>
+
+    </div>
+</body>
+</html>
