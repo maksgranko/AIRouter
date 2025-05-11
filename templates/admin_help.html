@@ -22,7 +22,7 @@
 <body>
     <div class="container">
         <h1>Справка по Панели Администратора и Конфигурации Роутера</h1>
-        <p><a href="{{ url_for('admin_dashboard_view') }}" class="nav-link">Вернуться на Дашборд</a></p>
+        <p><a href="{{ url_for('admin_dashboard') }}" class="nav-link">Вернуться на Дашборд</a></p>
 
         <h2>Использование Роутера как OpenAI-Совместимого API</h2>
         <p>Данный роутер предоставляет эндпоинты, совместимые с OpenAI API. Это означает, что вы можете использовать существующие клиенты и библиотеки, предназначенные для работы с OpenAI, направив их на адрес этого роутера.</p>
@@ -139,7 +139,7 @@ curl http://127.0.0.1:8000/v1/chat/completions \
             </li>
         </ol>
 
-        <p><a href="{{ url_for('admin_dashboard_view') }}" class="nav-link">Вернуться на Дашборд</a></p>
+        <p><a href="{{ url_for('admin_dashboard') }}" class="nav-link">Вернуться на Дашборд</a></p>
     </div>
 </body>
 </html>

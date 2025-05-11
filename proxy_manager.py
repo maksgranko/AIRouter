@@ -165,7 +165,7 @@ class ProxyManager:
             logger.info(f"Rotated to next proxy: {new_proxy['url']} (Index: {self.current_proxy_index})")
             return new_proxy
         else: # Индекс вышел за пределы списка
-            if self.proxy_rotation_mode_env == "cycle":
+            if self.current_rotation_mode == "cycle": # Исправлено на current_rotation_mode
                 logger.info("Reached end of proxy list. Cycling back to the first proxy.")
                 self.current_proxy_index = 0
                 return self.proxies[self.current_proxy_index]
@@ -193,21 +193,26 @@ class ProxyManager:
 
     def set_use_proxies(self, use_proxies: bool):
         """Включает или выключает использование прокси во время выполнения."""
-        if use_proxies:
-            if not self.proxies: # Если список прокси пуст
-                self._load_proxies() # Попытка загрузить, если ранее не были загружены
+        # 1. Обновить желаемое состояние
+        self.current_use_proxies = use_proxies
+
+        # 2. Попытаться актуализировать активное состояние на основе желаемого
+        if use_proxies: # Желаем включить
+            if not self.proxies: # Если прокси не загружены
+                self._load_proxies_from_file() # Попытаться загрузить
             
-            if self.proxies: # Если прокси есть (или были успешно загружены)
+            if self.proxies: # Если прокси есть (после попытки загрузки)
                 self.active = True
-                logger.info(f"Proxy usage enabled. Current mode: {self.proxy_rotation_mode_env}. Proxies available: {len(self.proxies)}")
+                logger.info(f"Proxy usage set to enabled. Proxies available: {len(self.proxies)}. Active: {self.active}.")
             else:
-                self.active = False # Не удалось загрузить прокси
-                logger.warning("Attempted to enable proxies, but no proxies are loaded. Proxies remain disabled.")
-        else:
+                self.active = False # Не удалось загрузить/нет прокси
+                logger.warning("Proxy usage set to enabled, but no proxies are loaded. ProxyManager remains inactive.")
+        else: # Желаем выключить
             self.active = False
-            logger.info("Proxy usage disabled.")
-            self.current_use_proxies = False # Обновляем текущее состояние
-            self._save_runtime_settings() # Сохраняем в settings.json
+            logger.info("Proxy usage set to disabled. ProxyManager is inactive.")
+        
+        # 3. Сохранить желаемое состояние в файл
+        self._save_runtime_settings()
 
     def set_rotation_mode(self, mode: str):
         """Устанавливает режим ротации прокси во время выполнения и сохраняет в settings.json."""
@@ -255,14 +260,14 @@ class ProxyManager:
         self.proxies.append(new_proxy)
         logger.info(f"Added proxy: {new_proxy}. Total proxies: {len(self.proxies)}")
         
-        # Если менеджер не был активен из-за отсутствия прокси, но теперь прокси есть и USE_PROXIES=true
-        if not self.active and self.use_proxies_env and self.proxies:
+        # Если менеджер не был активен из-за отсутствия прокси, но теперь прокси есть и self.current_use_proxies=True
+        if not self.active and self.current_use_proxies and self.proxies: 
             self.active = True
             if self.current_proxy_index == -1 : # Если это первый добавленный прокси
                  self.current_proxy_index = 0
             logger.info("ProxyManager became active after adding a proxy.")
-        elif self.active and self.current_proxy_index == -1 and len(self.proxies) == 1:
-            # Если был активен, но список был пуст (например, все удалили), и добавили первый
+        # Если менеджер был активен, но список прокси был пуст (например, все удалили), и мы добавляем первый
+        elif self.active and self.current_proxy_index == -1 and len(self.proxies) == 1: 
             self.current_proxy_index = 0
 
 
@@ -305,31 +310,34 @@ class ProxyManager:
         logger.info(f"Reloading proxies from {self.proxy_file_path}...")
         self.proxies = []
         self.current_proxy_index = -1
-        # self.active будет обновлен в _load_proxies в зависимости от use_proxies_env и наличия прокси
-        initial_active_state = self.active 
         self.active = False # Временно деактивируем перед загрузкой
 
-        if self.use_proxies_env:
-            self._load_proxies()
-            if self.proxies:
+        # Используем self.current_use_proxies, которое отражает актуальную настройку
+        if self.current_use_proxies:
+            self._load_proxies_from_file() 
+            if self.proxies: # Если после загрузки прокси есть
                 self.active = True
-                logger.info(f"Proxies reloaded. Active: {self.active}, Count: {len(self.proxies)}, Mode: {self.proxy_rotation_mode_env}")
+                logger.info(f"Proxies reloaded. Active: {self.active}, Count: {len(self.proxies)}, Mode: {self.current_rotation_mode}")
             else:
-                # self.active остается False, если прокси не загрузились
-                logger.warning("Proxies reloaded, but no proxies found or file error. ProxyManager remains inactive or becomes inactive.")
-        else: # Если USE_PROXIES=false, то менеджер не должен быть активен
+                self.active = False 
+                logger.warning("Proxies reloaded, but no proxies found or file error. ProxyManager remains inactive.")
+        else: 
             self.active = False
-            logger.info("Proxies reloaded, but USE_PROXIES is false. ProxyManager remains disabled.")
+            logger.info("Proxies reloaded, but current_use_proxies is false. ProxyManager remains disabled.")
 
 
 # Пример использования (для тестирования)
 if __name__ == '__main__':
-    # Установка переменных окружения для теста
-    # os.environ["USE_PROXIES"] = "true" 
-    # os.environ["PROXY_ROTATION_MODE"] = "cycle"
+    # Создаем временные файлы для теста
+    temp_config_dir = "temp_test_configs"
+    os.makedirs(temp_config_dir, exist_ok=True)
 
-    # Создаем временный файл прокси для теста
-    temp_proxy_file = "temp_proxies.json"
+    temp_settings_file = os.path.join(temp_config_dir, "settings.json")
+    temp_proxy_file = os.path.join(temp_config_dir, "proxies.json")
+    
+    with open(temp_settings_file, "w") as f:
+        json.dump({"proxy_settings": {"use_proxies": True, "rotation_mode": "once"}}, f)
+    
     with open(temp_proxy_file, "w") as f:
         json.dump([
             {"type": "http", "url": "http://proxy1.com:8080"},
@@ -337,25 +345,34 @@ if __name__ == '__main__':
             {"type": "http", "url": "http://proxy3.com:3128"}
         ], f)
 
-    proxy_manager_no_random = ProxyManager(proxy_file_path=temp_proxy_file, randomize_on_load=False)
-    print("--- Testing with randomize_on_load=False ---")
-    print(f"Initial Proxy: {proxy_manager_no_random.get_proxy()}")
-    proxy_manager_no_random.rotate_proxy()
-    print(f"Rotated Proxy 1: {proxy_manager_no_random.get_proxy()}")
-    proxy_manager_no_random.rotate_proxy()
-    print(f"Rotated Proxy 2: {proxy_manager_no_random.get_proxy()}")
-    proxy_manager_no_random.rotate_proxy()
-    print(f"Rotated Proxy 3 (should be None): {proxy_manager_no_random.get_proxy()}")
-    proxy_manager_no_random.reset_proxies()
-    print(f"Proxy after reset: {proxy_manager_no_random.get_proxy()}")
-
-    print("\n--- Testing with randomize_on_load=True ---")
-    proxy_manager_random = ProxyManager(proxy_file_path=temp_proxy_file, randomize_on_load=True)
-    print(f"Initial Proxy (randomized): {proxy_manager_random.get_proxy()}")
-    p1 = proxy_manager_random.get_proxy()
-    proxy_manager_random.rotate_proxy()
-    p2 = proxy_manager_random.get_proxy()
-    print(f"Rotated Proxy 1 (randomized): {p2}")
-    assert p1 != p2 or len(proxy_manager_random.proxies) == 1 # Проверка, что прокси действительно меняются (если их больше одного)
+    proxy_manager_test = ProxyManager(
+        proxy_file_path=temp_proxy_file, 
+        settings_file_path=temp_settings_file, 
+        randomize_on_load=False
+    )
+    print("--- Testing ProxyManager ---")
+    print(f"ProxyManager Active: {proxy_manager_test.active}")
+    print(f"Initial Proxy: {proxy_manager_test.get_proxy()}")
+    proxy_manager_test.rotate_proxy()
+    print(f"Rotated Proxy 1: {proxy_manager_test.get_proxy()}")
+    proxy_manager_test.add_proxy("http", "http://newproxy.com")
+    print(f"Proxies after add: {proxy_manager_test.proxies}")
+    proxy_manager_test.remove_proxy("http://proxy1.com:8080")
+    print(f"Proxies after remove: {proxy_manager_test.proxies}")
     
-    os.remove(temp_proxy_file)
+    # Тест set_use_proxies и set_rotation_mode
+    proxy_manager_test.set_use_proxies(False)
+    print(f"ProxyManager Active after set_use_proxies(False): {proxy_manager_test.active}")
+    proxy_manager_test.set_use_proxies(True)
+    print(f"ProxyManager Active after set_use_proxies(True): {proxy_manager_test.active}")
+    proxy_manager_test.set_rotation_mode("cycle")
+    print(f"Rotation mode after set_rotation_mode('cycle'): {proxy_manager_test.current_rotation_mode}")
+
+
+    # Очистка
+    if os.path.exists(temp_proxy_file):
+        os.remove(temp_proxy_file)
+    if os.path.exists(temp_settings_file):
+        os.remove(temp_settings_file)
+    if os.path.exists(temp_config_dir) and not os.listdir(temp_config_dir): 
+        os.rmdir(temp_config_dir)

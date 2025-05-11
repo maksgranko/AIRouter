@@ -10,20 +10,12 @@ from fastapi.responses import RedirectResponse
 # from api_key_manager import ApiKeyManager 
 # from proxy_manager import ProxyManager
 
-router = APIRouter(
-    prefix="/admin",
-    tags=["admin"],
-    dependencies=[Depends(lambda: get_current_username)] # Применяем ко всем роутам в этом APIRouter
-)
+security = HTTPBasic() # Определяем экземпляр HTTPBasic на уровне модуля
 
-security = HTTPBasic()
-templates = Jinja2Templates(directory="templates")
+async def get_current_username(credentials: HTTPBasicCredentials = Depends(security)): # Используем экземпляр security
+    ADMIN_USERNAME_ENV = os.getenv("ADMIN_USERNAME", "admin") 
+    ADMIN_PASSWORD_ENV = os.getenv("ADMIN_PASSWORD", "supersecret")
 
-ADMIN_USERNAME_ENV = os.getenv("ADMIN_USERNAME", "admin")
-ADMIN_PASSWORD_ENV = os.getenv("ADMIN_PASSWORD", "supersecret") # В продакшене используйте более надежный пароль!
-
-# Переносим get_current_username внутрь файла или импортируем, если он общий
-async def get_current_username(credentials: HTTPBasicCredentials = Depends(security)):
     correct_username = secrets.compare_digest(credentials.username, ADMIN_USERNAME_ENV)
     correct_password = secrets.compare_digest(credentials.password, ADMIN_PASSWORD_ENV)
     if not (correct_username and correct_password):
@@ -34,7 +26,32 @@ async def get_current_username(credentials: HTTPBasicCredentials = Depends(secur
         )
     return credentials.username
 
-@router.get("/dashboard", name="admin_dashboard") # Добавляем name для url_for
+router = APIRouter(
+    prefix="/admin",
+    tags=["admin"],
+    dependencies=[Depends(get_current_username)] 
+)
+
+templates = Jinja2Templates(directory="templates")
+
+# Закомментированные строки ниже не нужны, так как ADMIN_USERNAME_ENV и ADMIN_PASSWORD_ENV 
+# теперь читаются внутри get_current_username, а security определен выше.
+# # ADMIN_USERNAME_ENV и ADMIN_PASSWORD_ENV теперь читаются внутри get_current_username
+# # security = HTTPBasic() # HTTPBasic() теперь вызывается внутри Depends в get_current_username
+# # УДАЛЯЕМ ДУБЛИРУЮЩИЙСЯ БЛОК get_current_username, так как он уже определен выше.
+# # Оставляем только один экземпляр функции.
+# # Следующие строки были ошибочно оставлены и вызывали IndentationError:
+# #    correct_username = secrets.compare_digest(credentials.username, ADMIN_USERNAME_ENV)
+# #    correct_password = secrets.compare_digest(credentials.password, ADMIN_PASSWORD_ENV)
+# #    if not (correct_username and correct_password):
+# #        raise HTTPException(
+# #            status_code=status.HTTP_401_UNAUTHORIZED,
+# #            detail="Incorrect username or password",
+# #            headers={"WWW-Authenticate": "Basic"},
+# #        )
+# #    return credentials.username
+
+@router.get("/dashboard", name="admin_dashboard") 
 async def admin_dashboard_view(request: Request, username: str = Depends(get_current_username)):
     key_manager = request.app.state.key_manager # Исправлено дублирование
     proxy_manager = request.app.state.proxy_manager
@@ -51,9 +68,9 @@ async def admin_dashboard_view(request: Request, username: str = Depends(get_cur
         "username": username,
         "proxy_manager_is_active": proxy_manager.active, 
         "proxy_manager_active_status": proxy_status_text,
-        "current_proxy_rotation_mode": proxy_manager.proxy_rotation_mode_env, 
-        "initial_use_proxies_env": str(proxy_manager.use_proxies_env).lower(), 
-        "initial_proxy_rotation_mode_env": os.getenv("PROXY_ROTATION_MODE", "once").lower(), 
+        "current_proxy_rotation_mode": proxy_manager.current_rotation_mode, # Исправлено
+        "initial_use_proxies_env": str(os.getenv("USE_PROXIES", "true")).lower(), # Читаем из env напрямую
+        "initial_proxy_rotation_mode_env": os.getenv("PROXY_ROTATION_MODE", "once").lower(), # Читаем из env напрямую
         
         "openai_keys_file": key_manager.key_files.get("openai", "N/A"),
         "openai_keys_count": len(key_manager.api_keys.get("openai", [])),
@@ -84,7 +101,7 @@ async def update_proxy_settings_form(
     elif action == "set_rotation_mode" and rotation_mode is not None:
         proxy_manager.set_rotation_mode(rotation_mode)
         
-    return RedirectResponse(url=router.url_path_for("admin_dashboard_view"), status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=router.url_path_for("admin_dashboard"), status_code=status.HTTP_303_SEE_OTHER)
 
 @router.post("/dashboard/settings/module", name="update_module_status")
 async def update_module_status_form(
@@ -97,7 +114,7 @@ async def update_module_status_form(
     
     module_registry.set_module_active(module_name, module_status_bool)
     
-    return RedirectResponse(url=router.url_path_for("admin_dashboard_view"), status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=router.url_path_for("admin_dashboard"), status_code=status.HTTP_303_SEE_OTHER)
 
 @router.post("/dashboard/keys", name="manage_api_key")
 async def manage_api_key_form(
@@ -115,7 +132,7 @@ async def manage_api_key_form(
     elif action == "remove_key":
         key_manager.remove_key(service_name, api_key) # api_key здесь - это ключ для удаления
         
-    return RedirectResponse(url=router.url_path_for("admin_dashboard_view"), status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=router.url_path_for("admin_dashboard"), status_code=status.HTTP_303_SEE_OTHER)
 
 @router.post("/dashboard/proxies", name="manage_proxy_list")
 async def manage_proxy_list_form(
@@ -136,7 +153,7 @@ async def manage_proxy_list_form(
     elif action == "reload_proxies":
         proxy_manager.reload_proxies()
         
-    return RedirectResponse(url=router.url_path_for("admin_dashboard_view"), status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse(url=router.url_path_for("admin_dashboard"), status_code=status.HTTP_303_SEE_OTHER)
 
 @router.get("/help", name="admin_help")
 async def admin_help_view(request: Request, username: str = Depends(get_current_username)):

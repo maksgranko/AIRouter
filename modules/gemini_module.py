@@ -69,7 +69,11 @@ class GeminiChatModule(BaseModule):
                 logger.debug(f"Attempting Gemini API call: {method} {url} with key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}")
 
                 try:
-                    async with httpx.AsyncClient(proxies=httpx_proxies, timeout=30.0) as client:
+                    client_args = {"timeout": 30.0}
+                    if httpx_proxies:
+                        client_args["proxies"] = httpx_proxies
+                    
+                    async with httpx.AsyncClient(**client_args) as client:
                         response = None
                         if method.upper() == "POST":
                             response = await client.post(url, headers=headers, json=payload)

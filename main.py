@@ -13,8 +13,10 @@ import admin_router
 # например, в ProxyManager или admin_router.
 load_dotenv() 
 
+# app и registry создаются один раз здесь
 app = FastAPI()
-registry = ModuleRegistry()
+# ModuleRegistry теперь инициализируется с путем к файлу настроек в ensure_config_files_exist или после него
+# registry = ModuleRegistry() # Этот вызов будет ниже, после определения SETTINGS_FILE
 
 import json # Для создания пустых JSON файлов
 
@@ -52,9 +54,7 @@ def ensure_config_files_exist():
 # Вызываем функцию проверки/создания файлов перед инициализацией менеджеров
 ensure_config_files_exist()
 
-app = FastAPI() # app создается один раз
-
-# Инициализация ModuleRegistry с путем к файлу настроек
+# Инициализация ModuleRegistry с путем к файлу настроек, ПОСЛЕ того как SETTINGS_FILE определен
 registry = ModuleRegistry(settings_file_path=SETTINGS_FILE)
 
 # Инициализация остальных менеджеров

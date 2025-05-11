@@ -18,7 +18,7 @@
 <body>
     <div class="container">
         <h1>Панель Администратора</h1>
-        <p><a href="{{ url_for('admin_help_view') }}" class="nav-link" style="float: right; margin-top: -50px;">Справка</a></p>
+        <p><a href="{{ url_for('admin_help') }}" class="nav-link" style="float: right; margin-top: -50px;">Справка</a></p>
 
         <h2>Настройки Прокси</h2>
         <div class="setting">
@@ -103,6 +103,7 @@
             <p>Добавление или удаление ключей обновляет соответствующие JSON-файлы и перезагружает конфигурацию ключей в приложении.</p>
         </div>
 
+{% if proxy_manager_is_active %}
         <h2>Управление Прокси-серверами</h2>
         <div class="setting">
             <h3 style="color: #333;">Список прокси (из файла: {{ proxies_file }})</h3>
@@ -142,6 +143,7 @@
         <div class="instructions">
             <p>Добавление или удаление прокси обновляет файл <code>{{ proxies_file }}</code> и перезагружает конфигурацию прокси в приложении.</p>
         </div>
+{% endif %}
 
         <h2>Управление Модулями (Сервисами)</h2>
         {% if module_statuses %}

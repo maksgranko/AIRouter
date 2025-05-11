@@ -1,10 +1,10 @@
 {
   "proxy_settings": {
-    "use_proxies": true,
+    "use_proxies": false,
     "rotation_mode": "once"
   },
   "module_statuses": {
-    "openai": true,
+    "openai": false,
     "gemini": true
   }
 }
