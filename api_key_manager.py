@@ -104,6 +104,8 @@ class ApiKeyManager:
 
         file_path = self.key_files[service_name]
         try:
+            # Убедимся, что директория существует
+            os.makedirs(os.path.dirname(file_path), exist_ok=True)
             with open(file_path, 'w') as f:
                 json.dump(keys_to_save, f, indent=2) # Сохраняем с отступом для читаемости
             logger.info(f"Successfully saved {len(keys_to_save)} API keys for service '{service_name}' to {file_path}")

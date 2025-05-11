@@ -16,20 +16,65 @@ load_dotenv()
 app = FastAPI()
 registry = ModuleRegistry()
 
-# Инициализация менеджеров ПОСЛЕ load_dotenv(), чтобы они могли использовать переменные из .env
-key_manager = ApiKeyManager({
-    "openai": "openai_keys.json",
-    "gemini": "gemini_keys.json"
-})
-# ProxyManager уже читает переменные окружения в своем __init__
-proxy_manager = ProxyManager(proxy_file_path="proxies.json") 
+import json # Для создания пустых JSON файлов
 
-# Сохраняем менеджеры и реестр модулей в состоянии приложения для доступа из роутеров
+CONFIG_DIR = "configs"
+SETTINGS_FILE = os.path.join(CONFIG_DIR, "settings.json")
+OPENAI_KEYS_FILE = os.path.join(CONFIG_DIR, "openai_keys.json")
+GEMINI_KEYS_FILE = os.path.join(CONFIG_DIR, "gemini_keys.json")
+PROXIES_FILE = os.path.join(CONFIG_DIR, "proxies.json")
+
+def ensure_config_files_exist():
+    """Проверяет наличие папки configs и файлов конфигурации, создает их при необходимости."""
+    if not os.path.exists(CONFIG_DIR):
+        os.makedirs(CONFIG_DIR)
+        print(f"Created directory: {CONFIG_DIR}")
+
+    default_files_content = {
+        OPENAI_KEYS_FILE: [],
+        GEMINI_KEYS_FILE: [],
+        PROXIES_FILE: [],
+        SETTINGS_FILE: {
+            "proxy_settings": {"use_proxies": True, "rotation_mode": "once"},
+            "module_statuses": {"openai": True, "gemini": True}
+        }
+    }
+
+    for file_path, default_content in default_files_content.items():
+        if not os.path.exists(file_path):
+            try:
+                with open(file_path, 'w') as f:
+                    json.dump(default_content, f, indent=2)
+                print(f"Created default config file: {file_path}")
+            except Exception as e:
+                print(f"Error creating default config file {file_path}: {e}")
+
+# Вызываем функцию проверки/создания файлов перед инициализацией менеджеров
+ensure_config_files_exist()
+
+app = FastAPI() # app создается один раз
+
+# Инициализация ModuleRegistry с путем к файлу настроек
+registry = ModuleRegistry(settings_file_path=SETTINGS_FILE)
+
+# Инициализация остальных менеджеров
+key_manager = ApiKeyManager({
+    "openai": OPENAI_KEYS_FILE,
+    "gemini": GEMINI_KEYS_FILE
+})
+proxy_manager = ProxyManager(
+    proxy_file_path=PROXIES_FILE, 
+    settings_file_path=SETTINGS_FILE
+) 
+
+# Сохраняем менеджеры и реестр модулей в состоянии приложения
 app.state.key_manager = key_manager
 app.state.proxy_manager = proxy_manager
 app.state.module_registry = registry
 
 # Регистрация модулей API
+# ModuleRegistry теперь сам загрузит статусы активности из settings.json
+# и применит их или active_by_default, если статус для модуля не найден в файле.
 # Мы передаем менеджер ключей в модули, чтобы они могли запрашивать и ротировать ключи.
 # Регистрация модулей с передачей ApiKeyManager и ProxyManager
 if key_manager.get_key("openai"): 

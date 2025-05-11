@@ -13,36 +13,98 @@ class ProxyConfig(TypedDict):
 
 class ProxyManager:
     def __init__(self, 
-                 proxy_file_path: str = "proxies.json", 
+                 proxy_file_path: str, 
+                 settings_file_path: str, # Новый параметр
                  randomize_on_load: bool = True):
         """
         Инициализирует менеджер прокси.
         :param proxy_file_path: Путь к JSON-файлу со списком прокси.
+        :param settings_file_path: Путь к JSON-файлу с общими настройками.
         :param randomize_on_load: Перемешивать ли список прокси при загрузке.
         """
         self.proxy_file_path = proxy_file_path
+        self.settings_file_path = settings_file_path # Сохраняем путь
         self.proxies: List[ProxyConfig] = []
         self.current_proxy_index: int = -1 
         self.randomize_on_load = randomize_on_load
 
-        # Чтение настроек из переменных окружения
-        self.use_proxies_env = os.getenv("USE_PROXIES", "true").lower() == "true"
-        self.proxy_rotation_mode_env = os.getenv("PROXY_ROTATION_MODE", "once").lower() # "once" или "cycle"
-        
-        self.active = False # Становится True, если use_proxies_env=True и прокси успешно загружены
+        # Начальные значения, которые могут быть переопределены
+        self.current_use_proxies: bool = True 
+        self.current_rotation_mode: str = "once"
 
-        if self.use_proxies_env:
-            self._load_proxies()
+        self._load_runtime_settings() # Загружаем настройки из settings.json
+
+        # Переменные окружения имеют приоритет для начальной конфигурации
+        env_use_proxies_val = os.getenv("USE_PROXIES")
+        if env_use_proxies_val is not None:
+            self.current_use_proxies = env_use_proxies_val.lower() == "true"
+        
+        env_proxy_rotation_mode_val = os.getenv("PROXY_ROTATION_MODE")
+        if env_proxy_rotation_mode_val is not None:
+            if env_proxy_rotation_mode_val.lower() in ["once", "cycle"]:
+                self.current_rotation_mode = env_proxy_rotation_mode_val.lower()
+            else:
+                logger.warning(f"Invalid PROXY_ROTATION_MODE from env: '{env_proxy_rotation_mode_val}'. Using '{self.current_rotation_mode}'.")
+        
+        self.active = False 
+
+        if self.current_use_proxies:
+            self._load_proxies_from_file() # Используем новое имя метода
             if self.proxies:
                 self.active = True
-                logger.info(f"ProxyManager is active. Rotation mode: {self.proxy_rotation_mode_env}.")
+                logger.info(f"ProxyManager is active. Rotation mode: {self.current_rotation_mode}.")
             else:
-                logger.warning("ProxyManager is configured to use proxies, but no proxies were loaded. Will operate without proxies.")
+                logger.warning("ProxyManager is set to use proxies, but no proxies were loaded. Will operate without proxies.")
         else:
-            logger.info("ProxyManager is disabled via USE_PROXIES=false. Operating without proxies.")
+            logger.info("ProxyManager is disabled by configuration (USE_PROXIES=false or settings.json). Operating without proxies.")
 
+    def _load_runtime_settings(self):
+        """Загружает настройки use_proxies и rotation_mode из settings.json."""
+        try:
+            if os.path.exists(self.settings_file_path):
+                with open(self.settings_file_path, 'r') as f:
+                    settings = json.load(f)
+                    proxy_settings = settings.get("proxy_settings", {})
+                    
+                    if "use_proxies" in proxy_settings: # Загружаем, только если ключ существует
+                        self.current_use_proxies = bool(proxy_settings["use_proxies"])
+                    if "rotation_mode" in proxy_settings and proxy_settings["rotation_mode"] in ["once", "cycle"]:
+                         self.current_rotation_mode = proxy_settings["rotation_mode"]
+                    logger.info(f"Loaded proxy settings from {self.settings_file_path}: use_proxies={self.current_use_proxies}, rotation_mode={self.current_rotation_mode}")
+            else:
+                logger.info(f"{self.settings_file_path} not found. Using defaults or environment variables for proxy settings.")
+                # Если файл не найден, сохраняем текущие (дефолтные/из env) настройки, чтобы файл создался
+                self._save_runtime_settings() 
+        except Exception as e:
+            logger.error(f"Error loading runtime proxy settings from {self.settings_file_path}: {e}. Using defaults or environment variables.")
 
-    def _load_proxies(self):
+    def _save_runtime_settings(self):
+        """Сохраняет текущие proxy_settings (use_proxies, rotation_mode) в settings.json."""
+        try:
+            all_settings = {}
+            if os.path.exists(self.settings_file_path):
+                try:
+                    with open(self.settings_file_path, 'r') as f:
+                        all_settings = json.load(f)
+                except json.JSONDecodeError: # Если файл пуст или испорчен
+                    logger.warning(f"Could not decode JSON from {self.settings_file_path}, will overwrite with new settings.")
+                    all_settings = {} # Начинаем с чистого листа
+            
+            all_settings["proxy_settings"] = {
+                "use_proxies": self.current_use_proxies,
+                "rotation_mode": self.current_rotation_mode
+            }
+            
+            # Убедимся, что директория существует
+            os.makedirs(os.path.dirname(self.settings_file_path), exist_ok=True)
+
+            with open(self.settings_file_path, 'w') as f:
+                json.dump(all_settings, f, indent=2)
+            logger.info(f"Saved proxy settings to {self.settings_file_path}: use_proxies={self.current_use_proxies}, rotation_mode={self.current_rotation_mode}")
+        except Exception as e:
+            logger.error(f"Error saving runtime proxy settings to {self.settings_file_path}: {e}")
+
+    def _load_proxies_from_file(self): # Переименован
         """Загружает прокси из указанного файла."""
         try:
             if os.path.exists(self.proxy_file_path):
@@ -144,14 +206,15 @@ class ProxyManager:
         else:
             self.active = False
             logger.info("Proxy usage disabled.")
-        # Эта настройка не меняет self.use_proxies_env, которая отражает исходную настройку из окружения.
-        # Она меняет только текущее рабочее состояние self.active.
+            self.current_use_proxies = False # Обновляем текущее состояние
+            self._save_runtime_settings() # Сохраняем в settings.json
 
     def set_rotation_mode(self, mode: str):
-        """Устанавливает режим ротации прокси во время выполнения."""
+        """Устанавливает режим ротации прокси во время выполнения и сохраняет в settings.json."""
         if mode in ["once", "cycle"]:
-            self.proxy_rotation_mode_env = mode # Перезаписываем значение из окружения для текущей сессии
-            logger.info(f"Proxy rotation mode set to: {self.proxy_rotation_mode_env}")
+            self.current_rotation_mode = mode # Обновляем текущее состояние
+            logger.info(f"Proxy rotation mode set to: {self.current_rotation_mode}")
+            self._save_runtime_settings() # Сохраняем в settings.json
             # При смене режима, имеет смысл сбросить текущий индекс, чтобы начать с начала списка
             self.reset_proxies() 
         else:
@@ -166,6 +229,8 @@ class ProxyManager:
         # Мы сохраняем self.proxies, который является List[ProxyConfig]
         # ProxyConfig - это TypedDict, который при сериализации в JSON станет обычным dict.
         try:
+            # Убедимся, что директория существует
+            os.makedirs(os.path.dirname(self.proxy_file_path), exist_ok=True)
             with open(self.proxy_file_path, 'w') as f:
                 json.dump(self.proxies, f, indent=2)
             logger.info(f"Successfully saved {len(self.proxies)} proxies to {self.proxy_file_path}")

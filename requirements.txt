@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+openai<1.0.0
+httpx
+httpx-socks
+requests[socks]
+jinja2
+python-multipart
+python-dotenv
