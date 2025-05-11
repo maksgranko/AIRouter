@@ -1,4 +1,5 @@
 import httpx # Используем httpx для запросов
+from httpx_socks import AsyncProxyTransport # Для явного указания SOCKS транспорта
 from typing import Dict, Any, Optional, AsyncGenerator
 from base_module import BaseModule
 from api_key_manager import ApiKeyManager
@@ -32,7 +33,12 @@ class GeminiChatModule(BaseModule):
                     "https://": proxy_config['url'],
                 }
             elif proxy_config['type'] in ['socks4', 'socks5']:
-                return {"all://": proxy_config['url']}
+                # Используем явные схемы http/https для SOCKS,
+                # httpx-socks должен их корректно обработать.
+                return {
+                    "http://": proxy_config['url'], # e.g., "socks5://user:pass@host:port"
+                    "https://": proxy_config['url'], # e.g., "socks5://user:pass@host:port"
+                }
         return None
 
     async def _execute_non_streaming_with_rotation(
@@ -61,7 +67,21 @@ class GeminiChatModule(BaseModule):
                 logger.debug(f"Attempting Gemini API call: {method} {url} with key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}")
                 try:
                     client_args = {"timeout": 30.0}
-                    if httpx_proxies: client_args["proxies"] = httpx_proxies
+                    transport = None
+                    if httpx_proxies:
+                        # Проверяем, является ли это SOCKS прокси для явного создания транспорта
+                        # Мы берем URL из ключа "http://", так как _get_httpx_proxies для SOCKS кладет его туда
+                        proxy_url_for_transport = httpx_proxies.get("http://") 
+                        if proxy_url_for_transport and proxy_url_for_transport.startswith(("socks5://", "socks4://")):
+                            logger.debug(f"Creating AsyncProxyTransport for SOCKS: {proxy_url_for_transport}")
+                            transport = AsyncProxyTransport.from_url(proxy_url_for_transport)
+                            client_args["transport"] = transport
+                        else: # Для обычных HTTP/HTTPS прокси или если URL не SOCKS
+                            client_args["proxies"] = httpx_proxies
+                    
+                    logger.debug(f"httpx version: {httpx.__version__}")
+                    logger.debug(f"AsyncClient arguments: {client_args}")
+                    
                     async with httpx.AsyncClient(**client_args) as client:
                         response = None
                         if method.upper() == "POST":
@@ -146,8 +166,18 @@ class GeminiChatModule(BaseModule):
 
                 try:
                     client_args = {"timeout": None} 
+                    transport_stream = None
                     if httpx_proxies:
-                        client_args["proxies"] = httpx_proxies
+                        proxy_url_for_transport_stream = httpx_proxies.get("http://")
+                        if proxy_url_for_transport_stream and proxy_url_for_transport_stream.startswith(("socks5://", "socks4://")):
+                            logger.debug(f"Creating AsyncProxyTransport for SOCKS stream: {proxy_url_for_transport_stream}")
+                            transport_stream = AsyncProxyTransport.from_url(proxy_url_for_transport_stream)
+                            client_args["transport"] = transport_stream
+                        else:
+                            client_args["proxies"] = httpx_proxies
+                    
+                    logger.debug(f"httpx version for stream: {httpx.__version__}")
+                    logger.debug(f"AsyncClient arguments for stream: {client_args}")
                     
                     async with httpx.AsyncClient(**client_args) as client:
                         async with client.stream("POST", url, headers=headers, json=payload) as response:

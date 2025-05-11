@@ -114,7 +114,15 @@ class ProxyManager:
                         self.proxies = []
                         for proxy_data in loaded_proxies:
                             if isinstance(proxy_data, dict) and "type" in proxy_data and "url" in proxy_data:
-                                self.proxies.append(ProxyConfig(type=proxy_data["type"], url=proxy_data["url"]))
+                                proxy_type = proxy_data["type"].lower()
+                                proxy_url = proxy_data["url"].strip()
+                                
+                                # Автоматическая коррекция схемы URL
+                                corrected_url = self._ensure_correct_scheme(proxy_url, proxy_type)
+                                if corrected_url != proxy_url:
+                                    logger.info(f"Corrected URL scheme for proxy type '{proxy_type}': '{proxy_url}' -> '{corrected_url}'")
+                                
+                                self.proxies.append(ProxyConfig(type=proxy_type, url=corrected_url))
                             else:
                                 logger.warning(f"Invalid proxy entry format in {self.proxy_file_path}: {proxy_data}. Skipping.")
                         
@@ -225,6 +233,35 @@ class ProxyManager:
         else:
             logger.warning(f"Invalid proxy rotation mode: {mode}. Mode not changed. Allowed: 'once', 'cycle'.")
 
+    def _ensure_correct_scheme(self, url: str, proxy_type: str) -> str:
+        """Гарантирует, что URL имеет правильную схему для указанного типа прокси."""
+        url = url.strip()
+        proxy_type = proxy_type.lower()
+        
+        current_scheme = ""
+        if "://" in url:
+            current_scheme = url.split("://", 1)[0].lower()
+
+        expected_scheme = proxy_type
+        if proxy_type == "http" and current_scheme == "https": # Если тип http, а схема https, оставляем https
+            expected_scheme = "https"
+        elif proxy_type not in ["http", "https", "socks4", "socks5"]:
+            logger.warning(f"Unknown proxy type '{proxy_type}' for URL '{url}'. Cannot ensure correct scheme.")
+            return url # Возвращаем как есть, если тип неизвестен
+
+        # Если схема уже правильная (или https для http типа), ничего не делаем
+        if current_scheme == expected_scheme:
+            return url
+        
+        # Удаляем существующую неправильную схему, если она есть
+        url_no_scheme = url.split("://", 1)[-1] if "://" in url else url
+
+        if not url_no_scheme: # Если URL пустой после удаления схемы
+            logger.warning(f"URL became empty after attempting to correct scheme for type '{proxy_type}', original URL '{url}'.")
+            return url # Возвращаем оригинал, чтобы избежать пустой строки
+
+        return f"{expected_scheme}://{url_no_scheme}"
+
     def _save_proxies_to_file(self) -> bool:
         """Сохраняет текущий список прокси в JSON-файл."""
         if not self.proxy_file_path: # На случай, если путь не задан (хотя он задается в __init__)
@@ -250,7 +287,14 @@ class ProxyManager:
             logger.error("Invalid proxy type or URL provided.")
             return False
         
-        new_proxy = ProxyConfig(type=proxy_type.lower(), url=proxy_url.strip())
+        proxy_type_lower = proxy_type.lower()
+        proxy_url_stripped = proxy_url.strip()
+        
+        corrected_url = self._ensure_correct_scheme(proxy_url_stripped, proxy_type_lower)
+        if corrected_url != proxy_url_stripped:
+            logger.info(f"Corrected URL scheme for new proxy type '{proxy_type_lower}': '{proxy_url_stripped}' -> '{corrected_url}'")
+
+        new_proxy = ProxyConfig(type=proxy_type_lower, url=corrected_url)
 
         # Проверка на дубликаты (по URL)
         if any(p['url'] == new_proxy['url'] for p in self.proxies):

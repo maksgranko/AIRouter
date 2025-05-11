@@ -1,14 +1,6 @@
 [
   {
-    "type": "socks4",
-    "url": "socks4://your_socks4_proxy_host:port"
-  },
-  {
     "type": "socks5",
-    "url": "socks5://your_socks5_proxy_host:port"
-  },
-  {
-    "type": "http",
-    "url": "http://your_http_proxy_host:port"
+    "url": "socks5://Chy5attLe0:lFPoLuSgS8@146.19.84.231:37914"
   }
 ]
