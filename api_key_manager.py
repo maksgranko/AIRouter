@@ -42,47 +42,72 @@ class ApiKeyManager:
             except Exception as e:
                 logger.error(f"An unexpected error occurred while loading keys for service '{service_name}' from {file_path}: {e}")
                 self.api_keys[service_name] = []
+            
+            # Инициализируем индекс -1, если ключи не загружены или их нет, чтобы get_key корректно обработал первый вызов
+            if not self.api_keys.get(service_name):
+                 self.current_key_indices[service_name] = -1
 
-    def get_key(self, service_name: str) -> Optional[str]:
+
+    def get_key(self, service_name: str, peek: bool = False) -> Optional[str]:
         """
         Возвращает текущий активный API ключ для указанного сервиса.
-        Если ключи закончились или не загружены, возвращает None.
+        Если peek=True, не изменяет текущий индекс.
+        Если ключи не загружены, возвращает None.
+        При первом вызове (если индекс -1) для сервиса с ключами, устанавливает индекс на 0 (если не peek).
         """
         if service_name not in self.api_keys or not self.api_keys[service_name]:
-            logger.warning(f"No API keys available for service '{service_name}'.")
+            # logger.warning(f"No API keys available for service '{service_name}'.") # Может быть слишком много логов
             return None
         
-        idx = self.current_key_indices.get(service_name, 0)
-        if idx < len(self.api_keys[service_name]):
-            return self.api_keys[service_name][idx]
-        else:
-            logger.warning(f"All API keys for service '{service_name}' have been tried.")
-            return None
+        keys_for_service = self.api_keys[service_name]
+        current_idx = self.current_key_indices.get(service_name, -1)
 
-    def rotate_key(self, service_name: str) -> Optional[str]:
+        if current_idx == -1: # Первый вызов для этого сервиса или ключи были удалены/не загружены
+            if not keys_for_service: # Двойная проверка на случай, если список ключей пуст
+                return None
+            if not peek:
+                self.current_key_indices[service_name] = 0
+                logger.info(f"Initialized key index for service '{service_name}' to 0.")
+                return keys_for_service[0]
+            else: # peek=True, возвращаем первый ключ, не меняя индекс -1
+                return keys_for_service[0]
+        
+        # Если индекс уже валидный
+        if 0 <= current_idx < len(keys_for_service):
+            return keys_for_service[current_idx]
+        else:
+            # Этого не должно происходить, если rotate_key и reset_keys работают правильно
+            logger.error(f"Invalid key index {current_idx} for service '{service_name}' with {len(keys_for_service)} keys. Resetting to 0.")
+            if not peek:
+                self.current_key_indices[service_name] = 0
+                return keys_for_service[0] if keys_for_service else None
+            else: # При peek не меняем индекс, но если он невалиден, вернем первый или None
+                return keys_for_service[0] if keys_for_service else None
+
+
+    def rotate_key(self, service_name: str) -> bool:
         """
-        Переключается на следующий API ключ для указанного сервиса.
-        Возвращает новый ключ или None, если все ключи были использованы.
+        Переключается на следующий API ключ для указанного сервиса циклически.
+        Возвращает True, если ключи существуют и ротация произошла (даже если вернулись к первому).
+        Возвращает False, если ключей для сервиса нет.
         """
         if service_name not in self.api_keys or not self.api_keys[service_name]:
             logger.warning(f"Cannot rotate keys for service '{service_name}': no keys loaded.")
-            return None
+            return False
 
-        current_idx = self.current_key_indices.get(service_name, 0)
+        keys_for_service = self.api_keys[service_name]
+        current_idx = self.current_key_indices.get(service_name, -1)
+        
         next_idx = current_idx + 1
-
-        if next_idx < len(self.api_keys[service_name]):
-            self.current_key_indices[service_name] = next_idx
-            new_key = self.api_keys[service_name][next_idx]
-            logger.info(f"Rotated API key for service '{service_name}'. New key index: {next_idx}")
-            return new_key
-        else:
-            # Все ключи были перебраны, можно либо остановиться, либо начать сначала (циклическая ротация)
-            # Пока просто останавливаемся и сообщаем об этом
-            logger.warning(f"All API keys for service '{service_name}' have been tried. Cannot rotate further.")
-            # Устанавливаем индекс за пределы списка, чтобы get_key возвращал None
-            self.current_key_indices[service_name] = len(self.api_keys[service_name]) 
-            return None
+        
+        if next_idx >= len(keys_for_service):
+            logger.info(f"Reached end of API key list for service '{service_name}'. Cycling back to the first key.")
+            next_idx = 0 # Циклическая ротация
+        
+        self.current_key_indices[service_name] = next_idx
+        # new_key = keys_for_service[next_idx] # Сам ключ не возвращаем, его получит get_key()
+        logger.info(f"Rotated API key for service '{service_name}'. New key index: {next_idx}")
+        return True
 
     def reset_keys(self, service_name: str):
         """Сбрасывает индекс текущего ключа на начало списка для указанного сервиса."""

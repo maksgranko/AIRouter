@@ -5,7 +5,7 @@ import inspect # Для проверки типа функции
 from typing import AsyncGenerator, Dict, Any, Optional # Для sse_event_formatter
 from dotenv import load_dotenv # Импортируем load_dotenv
 from fastapi import FastAPI, Request, UploadFile, HTTPException, Depends
-from fastapi.responses import StreamingResponse, JSONResponse # Для потоковых ответов и JSON ответов
+from fastapi.responses import StreamingResponse, JSONResponse, Response, FileResponse # Добавлен FileResponse
 from fastapi.security.http import HTTPBearer, HTTPAuthorizationCredentials
 from registry import ModuleRegistry
 from modules.openai_module import OpenAIChatModule
@@ -18,7 +18,7 @@ import logging # Добавляем импорт logging
 
 # Настраиваем базовое логирование
 open_browser_on_save = False
-logging_type = logging.ERROR
+logging_type = logging.DEBUG
 
 logging.basicConfig(level=logging_type, format='%(levelname)s:%(name)s:%(asctime)s:%(message)s') # Изменено на DEBUG и добавлен asctime
 logger = logging.getLogger(__name__) # Создаем логгер для main.py
@@ -68,9 +68,14 @@ def ensure_config_files_exist():
         GEMINI_KEYS_FILE: [],
         PROXIES_FILE: [],
         SETTINGS_FILE: {
-            "proxy_settings": {"use_proxies": True, "rotation_mode": "once"},
+            "proxy_settings": {
+                "use_proxies": True, 
+                "rotation_mode": "once",
+                "force_proxy_rotation_after_request": False, 
+                "select_random_proxy_each_request": False # Переименованная настройка
+            },
             "module_statuses": {"openai": True, "gemini": True},
-            "require_airouter_api_key": False # <--- Добавлено значение по умолчанию
+            "require_airouter_api_key": False 
         }
     }
     # Создаем файл для ключей AIRouter, если его нет
@@ -102,7 +107,8 @@ key_manager = ApiKeyManager({
     "openai": OPENAI_KEYS_FILE,
     "gemini": GEMINI_KEYS_FILE
 })
-proxy_manager = ProxyManager(
+# randomize_on_load убран из конструктора, будет читаться из settings.json внутри ProxyManager
+proxy_manager = ProxyManager( 
     proxy_file_path=PROXIES_FILE,
     settings_file_path=SETTINGS_FILE
 )
@@ -119,8 +125,10 @@ app.state.settings_file_path = SETTINGS_FILE # <--- Добавлено для д
 # Middleware для проверки API ключа AIRouter
 @app.middleware("http")
 async def check_airouter_api_key(request: Request, call_next):
-    # Пропускаем проверку для админ-панели и статических файлов (если они есть)
-    if request.url.path.startswith("/admin") or request.url.path.startswith("/static"):
+    # Пропускаем проверку для админ-панели, статических файлов и favicon.ico
+    if request.url.path == "/favicon.ico" or \
+       request.url.path.startswith("/admin") or \
+       request.url.path.startswith("/static"):
         response = await call_next(request)
         return response
 
@@ -184,16 +192,20 @@ async def check_airouter_api_key(request: Request, call_next):
 if key_manager.get_key("openai"): 
     registry.register(OpenAIChatModule(
         api_key_manager=key_manager, 
-        proxy_manager=proxy_manager, 
+        proxy_manager=proxy_manager,
+        settings_file_path=SETTINGS_FILE, # Добавлено
         service_name="openai"
     ))
 else:
     print("Warning: No OpenAI API keys found. OpenAI module will not be registered.")
 
 if key_manager.get_key("gemini"): 
+    # Предполагаем, что GeminiChatModule также будет обновлен для приема settings_file_path
+    # Если нет, эту строку нужно будет адаптировать или временно закомментировать settings_file_path
     registry.register(GeminiChatModule(
         api_key_manager=key_manager, 
-        proxy_manager=proxy_manager, 
+        proxy_manager=proxy_manager,
+        settings_file_path=SETTINGS_FILE, # Добавлено (потребует изменений в GeminiChatModule)
         service_name="gemini"
     ))
 else:
@@ -208,6 +220,15 @@ except Exception as e:
 
 # Подключаем роутер админ-панели
 app.include_router(admin_router.router)
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    favicon_path = os.path.join("templates", "favicon.ico")
+    if os.path.exists(favicon_path):
+        return FileResponse(favicon_path, media_type="image/vnd.microsoft.icon")
+    else:
+        # Если файла нет по какой-то причине, возвращаем 204, чтобы не было ошибки 404 в логах браузера
+        return Response(status_code=204)
 
 def get_module(request_data: dict):
     """

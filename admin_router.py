@@ -70,12 +70,14 @@ async def admin_dashboard_view(request: Request, username: str = Depends(get_cur
     for service_name_iter in key_manager.key_files.keys():
         service_api_keys_info[service_name_iter] = key_manager.api_keys.get(service_name_iter, [])
 
-    # Чтение require_airouter_api_key из settings.json
+    # Чтение require_airouter_api_key и force_proxy_rotation_after_request из settings.json
     require_airouter_api_key = False
+    force_proxy_rotation_after_request = False # Значение по умолчанию
     try:
         with open(settings_file_path, 'r') as f:
             settings_data = json.load(f)
             require_airouter_api_key = settings_data.get("require_airouter_api_key", False)
+            force_proxy_rotation_after_request = settings_data.get("proxy_settings", {}).get("force_proxy_rotation_after_request", False)
     except Exception as e:
         print(f"Error reading settings for admin dashboard: {e}") # Логирование ошибки
 
@@ -85,6 +87,8 @@ async def admin_dashboard_view(request: Request, username: str = Depends(get_cur
         "proxy_manager_is_active": proxy_manager.active,
         "proxy_manager_active_status": proxy_status_text,
         "current_proxy_rotation_mode": proxy_manager.current_rotation_mode,
+        "force_proxy_rotation_after_request": force_proxy_rotation_after_request, 
+        "select_random_proxy_each_request": proxy_manager.select_random_proxy_each_request, # Обновленное имя настройки
         "initial_use_proxies_env": str(os.getenv("USE_PROXIES", "true")).lower(),
         "initial_proxy_rotation_mode_env": os.getenv("PROXY_ROTATION_MODE", "once").lower(),
         
@@ -111,15 +115,36 @@ async def update_proxy_settings_form(
     request: Request,
     use_proxies_str: Optional[str] = Form(None, alias="use_proxies"), 
     rotation_mode: Optional[str] = Form(None, alias="rotation_mode"),
+    force_proxy_rotation_str: Optional[str] = Form(None, alias="force_proxy_rotation_after_request"),
+    select_random_proxy_each_request_str: Optional[str] = Form(None, alias="select_random_proxy_each_request"), # Обновленное имя параметра
     action: str = Form(...) 
 ):
     proxy_manager = request.app.state.proxy_manager
+    settings_file_path = request.app.state.settings_file_path 
     
     if action == "set_use_proxies" and use_proxies_str is not None:
         use_proxies_bool = use_proxies_str.lower() == "true"
-        proxy_manager.set_use_proxies(use_proxies_bool)
+        proxy_manager.set_use_proxies(use_proxies_bool) 
     elif action == "set_rotation_mode" and rotation_mode is not None:
-        proxy_manager.set_rotation_mode(rotation_mode)
+        proxy_manager.set_rotation_mode(rotation_mode) 
+    elif action == "set_force_proxy_rotation" and force_proxy_rotation_str is not None:
+        force_proxy_rotation_bool = force_proxy_rotation_str.lower() == "true"
+        try:
+            with open(settings_file_path, 'r') as f: 
+                settings_data = json.load(f)
+            
+            if "proxy_settings" not in settings_data:
+                settings_data["proxy_settings"] = {} 
+            settings_data["proxy_settings"]["force_proxy_rotation_after_request"] = force_proxy_rotation_bool
+            
+            with open(settings_file_path, 'w') as f:
+                json.dump(settings_data, f, indent=2)
+        except Exception as e:
+            print(f"Error updating force_proxy_rotation_after_request: {e}")
+            raise HTTPException(status_code=500, detail="Could not update proxy settings for force rotation.")
+    elif action == "set_select_random_proxy_each_request" and select_random_proxy_each_request_str is not None: # Обновленное действие
+        select_random_bool = select_random_proxy_each_request_str.lower() == "true"
+        proxy_manager.set_select_random_proxy_each_request(select_random_bool) # Используем обновленный метод ProxyManager
         
     return RedirectResponse(url=router.url_path_for("admin_dashboard"), status_code=status.HTTP_303_SEE_OTHER)
 
@@ -215,6 +240,9 @@ async def manage_proxy_list_form(
         proxy_manager.remove_proxy(proxy_url)
     elif action == "reload_proxies":
         proxy_manager.reload_proxies()
+    elif action == "shuffle_proxies": # Новое действие
+        proxy_manager.shuffle_proxies_in_memory_and_save()
+        # Можно добавить flash-сообщения об успехе/ошибке здесь, если используется система flash-сообщений
         
     return RedirectResponse(url=router.url_path_for("admin_dashboard"), status_code=status.HTTP_303_SEE_OTHER)
 

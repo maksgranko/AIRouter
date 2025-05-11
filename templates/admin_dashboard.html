@@ -42,18 +42,50 @@
             <form action="{{ url_for('update_proxy_settings') }}" method="post" style="display: inline-block;">
                 <label for="rotation_mode" class="setting-name">Режим ротации прокси:</label>
                 <select name="rotation_mode" id="rotation_mode">
-                    <option value="once" {% if current_proxy_rotation_mode == "once" %}selected{% endif %}>Однократный обход (once)</option>
-                    <option value="cycle" {% if current_proxy_rotation_mode == "cycle" %}selected{% endif %}>Циклический обход (cycle)</option>
+                    <option value="once" {% if current_proxy_rotation_mode == "once" %}selected{% endif %}>Однократный (once)</option>
+                    <option value="cycle" {% if current_proxy_rotation_mode == "cycle" %}selected{% endif %}>Циклический (cycle)</option>
+                    <option value="failover_cycle" {% if current_proxy_rotation_mode == "failover_cycle" %}selected{% endif %}>Отказоустойчивый циклический (failover_cycle)</option>
                 </select>
                 <button type="submit" name="action" value="set_rotation_mode">Применить</button>
             </form>
             <br>
-            <small>Текущий режим: <span class="setting-value">{{ current_proxy_rotation_mode }}</span></small>
-            <small>(Исходная настройка из PROXY_ROTATION_MODE: {{ initial_proxy_rotation_mode_env }})</small>
+            <small>Текущий режим: <span class="setting-value">{{ current_proxy_rotation_mode }}</span>.</small>
+            <small>
+                (<code>once</code>: однократный обход списка; <code>cycle</code>: циклический обход; <code>failover_cycle</code>: циклический, но переход к следующему только при ошибке текущего, игнорирует "Принудительную ротацию после запроса").
+                Исходная настройка из PROXY_ROTATION_MODE: {{ initial_proxy_rotation_mode_env }}.
+            </small>
+        </div>
+
+        <div class="setting">
+            <form action="{{ url_for('update_proxy_settings') }}" method="post" style="display: inline-block;">
+                <label for="force_proxy_rotation_after_request" class="setting-name">Принудительная ротация прокси после каждого запроса:</label>
+                <select name="force_proxy_rotation_after_request" id="force_proxy_rotation_after_request">
+                    <option value="true" {% if force_proxy_rotation_after_request %}selected{% endif %}>Включено</option>
+                    <option value="false" {% if not force_proxy_rotation_after_request %}selected{% endif %}>Выключено</option>
+                </select>
+                <button type="submit" name="action" value="set_force_proxy_rotation">Применить</button>
+            </form>
+            <br>
+            <small>Текущий статус: <span class="setting-value">{% if force_proxy_rotation_after_request %}Включено{% else %}Выключено{% endif %}</span></small>
+        </div>
+
+        <div class="setting">
+            <form action="{{ url_for('update_proxy_settings') }}" method="post" style="display: inline-block;">
+                <label for="select_random_proxy_each_request" class="setting-name">Выбор прокси для каждого запроса:</label>
+                <select name="select_random_proxy_each_request" id="select_random_proxy_each_request">
+                    <option value="false" {% if not select_random_proxy_each_request %}selected{% endif %}>Последовательный (по индексу)</option>
+                    <option value="true" {% if select_random_proxy_each_request %}selected{% endif %}>Случайный</option>
+                </select>
+                <button type="submit" name="action" value="set_select_random_proxy_each_request">Применить</button>
+            </form>
+            <br>
+            <small>Текущий режим выбора: <span class="setting-value">{% if select_random_proxy_each_request %}Случайный{% else %}Последовательный{% endif %}</span>.</small>
+            <small>Если выбран "Случайный", настройки "Режим ротации" и "Принудительная ротация после запроса" игнорируются.</small>
         </div>
         
         <div class="instructions">
-            <p>Изменения, внесенные через эту панель, действуют до перезапуска приложения. Для постоянных изменений используйте переменные окружения <code>USE_PROXIES</code> и <code>PROXY_ROTATION_MODE</code>.</p>
+            <p>Изменения, внесенные через эту панель (Использование прокси, Режим ротации, Принудительная ротация, Режим выбора прокси), сохраняются в <code>configs/settings.json</code> и действуют немедленно.</p>
+            <p>Для первоначальной конфигурации при первом запуске или если <code>configs/settings.json</code> отсутствует, используются переменные окружения <code>USE_PROXIES</code>, <code>PROXY_ROTATION_MODE</code> и <code>SELECT_RANDOM_PROXY_EACH_REQUEST</code>. Настройки "Принудительная ротация" и "Режим выбора прокси (случайный)" по умолчанию выключены.</p>
         </div>
 
         <h2>Информация о Файлах Конфигурации</h2>
@@ -139,9 +171,14 @@
                 <br>
                 <button type="submit" name="action" value="add_proxy" style="margin-top: 5px;">Добавить прокси</button>
             </form>
-             <form action="{{ url_for('manage_proxy_list') }}" method="post" style="margin-top:15px;">
-                <button type="submit" name="action" value="reload_proxies">Перезагрузить список прокси из файла</button>
-            </form>
+            <div style="margin-top:15px;">
+                <form action="{{ url_for('manage_proxy_list') }}" method="post" style="display: inline-block; margin-right: 10px;">
+                    <button type="submit" name="action" value="reload_proxies">Перезагрузить список из файла</button>
+                </form>
+                <form action="{{ url_for('manage_proxy_list') }}" method="post" style="display: inline-block;">
+                    <button type="submit" name="action" value="shuffle_proxies" onclick="return confirm('Вы уверены, что хотите перемешать текущий список прокси и сохранить его в файл? Порядок будет изменен.');">Перемешать текущий список</button>
+                </form>
+            </div>
         </div>
         <div class="instructions">
             <p>Добавление или удаление прокси обновляет файл <code>{{ proxies_file }}</code> и перезагружает конфигурацию прокси в приложении.</p>

@@ -26,11 +26,16 @@ class ProxyManager:
         self.settings_file_path = settings_file_path # Сохраняем путь
         self.proxies: List[ProxyConfig] = []
         self.current_proxy_index: int = -1 
-        self.randomize_on_load = randomize_on_load
+        
+        # randomize_on_load будет инициализирован из settings или значением по умолчанию
+        # Убираем параметр randomize_on_load из конструктора, он будет управляться через settings
+        # self.randomize_on_load = randomize_on_load 
 
-        # Начальные значения, которые могут быть переопределены
+        # Начальные значения, которые могут быть переопределены настройками или env
         self.current_use_proxies: bool = True 
         self.current_rotation_mode: str = "once"
+        self.select_random_proxy_each_request: bool = False # Новое имя для настройки случайного выбора
+        # self.current_randomize_on_load больше не используется в таком виде
 
         self._load_runtime_settings() # Загружаем настройки из settings.json
 
@@ -41,10 +46,14 @@ class ProxyManager:
         
         env_proxy_rotation_mode_val = os.getenv("PROXY_ROTATION_MODE")
         if env_proxy_rotation_mode_val is not None:
-            if env_proxy_rotation_mode_val.lower() in ["once", "cycle"]:
+            if env_proxy_rotation_mode_val.lower() in ["once", "cycle", "failover_cycle"]: 
                 self.current_rotation_mode = env_proxy_rotation_mode_val.lower()
             else:
                 logger.warning(f"Invalid PROXY_ROTATION_MODE from env: '{env_proxy_rotation_mode_val}'. Using '{self.current_rotation_mode}'.")
+
+        env_select_random_proxy_val = os.getenv("SELECT_RANDOM_PROXY_EACH_REQUEST") 
+        if env_select_random_proxy_val is not None:
+            self.select_random_proxy_each_request = env_select_random_proxy_val.lower() == "true"
         
         self.active = False 
 
@@ -59,27 +68,29 @@ class ProxyManager:
             logger.info("ProxyManager is disabled by configuration (USE_PROXIES=false or settings.json). Operating without proxies.")
 
     def _load_runtime_settings(self):
-        """Загружает настройки use_proxies и rotation_mode из settings.json."""
+        """Загружает настройки use_proxies, rotation_mode и select_random_proxy_each_request из settings.json."""
         try:
             if os.path.exists(self.settings_file_path):
                 with open(self.settings_file_path, 'r') as f:
                     settings = json.load(f)
                     proxy_settings = settings.get("proxy_settings", {})
                     
-                    if "use_proxies" in proxy_settings: # Загружаем, только если ключ существует
+                    if "use_proxies" in proxy_settings:
                         self.current_use_proxies = bool(proxy_settings["use_proxies"])
-                    if "rotation_mode" in proxy_settings and proxy_settings["rotation_mode"] in ["once", "cycle"]:
+                    if "rotation_mode" in proxy_settings and proxy_settings["rotation_mode"] in ["once", "cycle", "failover_cycle"]: 
                          self.current_rotation_mode = proxy_settings["rotation_mode"]
-                    logger.info(f"Loaded proxy settings from {self.settings_file_path}: use_proxies={self.current_use_proxies}, rotation_mode={self.current_rotation_mode}")
+                    if "select_random_proxy_each_request" in proxy_settings: 
+                        self.select_random_proxy_each_request = bool(proxy_settings["select_random_proxy_each_request"])
+
+                    logger.info(f"Loaded proxy settings from {self.settings_file_path}: use_proxies={self.current_use_proxies}, rotation_mode={self.current_rotation_mode}, select_random_proxy_each_request={self.select_random_proxy_each_request}")
             else:
                 logger.info(f"{self.settings_file_path} not found. Using defaults or environment variables for proxy settings.")
-                # Если файл не найден, сохраняем текущие (дефолтные/из env) настройки, чтобы файл создался
                 self._save_runtime_settings() 
         except Exception as e:
             logger.error(f"Error loading runtime proxy settings from {self.settings_file_path}: {e}. Using defaults or environment variables.")
 
     def _save_runtime_settings(self):
-        """Сохраняет текущие proxy_settings (use_proxies, rotation_mode) в settings.json."""
+        """Сохраняет текущие proxy_settings (use_proxies, rotation_mode, select_random_proxy_each_request) в settings.json."""
         try:
             all_settings = {}
             if os.path.exists(self.settings_file_path):
@@ -92,7 +103,8 @@ class ProxyManager:
             
             all_settings["proxy_settings"] = {
                 "use_proxies": self.current_use_proxies,
-                "rotation_mode": self.current_rotation_mode
+                "rotation_mode": self.current_rotation_mode,
+                "select_random_proxy_each_request": self.select_random_proxy_each_request 
             }
             
             # Убедимся, что директория существует
@@ -100,7 +112,7 @@ class ProxyManager:
 
             with open(self.settings_file_path, 'w') as f:
                 json.dump(all_settings, f, indent=2)
-            logger.info(f"Saved proxy settings to {self.settings_file_path}: use_proxies={self.current_use_proxies}, rotation_mode={self.current_rotation_mode}")
+            logger.info(f"Saved proxy settings to {self.settings_file_path}: use_proxies={self.current_use_proxies}, rotation_mode={self.current_rotation_mode}, select_random_proxy_each_request={self.select_random_proxy_each_request}")
         except Exception as e:
             logger.error(f"Error saving runtime proxy settings to {self.settings_file_path}: {e}")
 
@@ -127,11 +139,9 @@ class ProxyManager:
                                 logger.warning(f"Invalid proxy entry format in {self.proxy_file_path}: {proxy_data}. Skipping.")
                         
                         if self.proxies:
-                            if self.randomize_on_load:
-                                random.shuffle(self.proxies)
-                                logger.info(f"Successfully loaded and randomized {len(self.proxies)} proxies from {self.proxy_file_path}.")
-                            else:
-                                logger.info(f"Successfully loaded {len(self.proxies)} proxies from {self.proxy_file_path}.")
+                            # Перемешивание при загрузке убрано. Список всегда загружается в исходном порядке.
+                            # self.select_random_proxy_each_request определяет, будет ли get_proxy() выбирать случайно.
+                            logger.info(f"Successfully loaded {len(self.proxies)} proxies from {self.proxy_file_path} (order preserved).")
                             self.current_proxy_index = 0 
                         else:
                             logger.warning(f"No valid proxies found in {self.proxy_file_path}.")
@@ -152,20 +162,45 @@ class ProxyManager:
     def get_proxy(self) -> Optional[ProxyConfig]:
         """
         Возвращает текущий активный прокси, если менеджер активен и прокси доступны.
+        Учитывает режим select_random_proxy_each_request.
         """
-        if not self.active or not self.proxies or self.current_proxy_index < 0 or self.current_proxy_index >= len(self.proxies):
-            logger.debug("ProxyManager inactive or no proxies available / all tried (in 'once' mode).")
+        if not self.active or not self.proxies:
+            logger.debug("ProxyManager inactive or no proxies loaded.")
+            return None
+
+        if self.select_random_proxy_each_request:
+            selected_proxy = random.choice(self.proxies)
+            logger.debug(f"Random proxy selected: {selected_proxy['url']}")
+            return selected_proxy
+        
+        # Для неслучайных режимов
+        if self.current_proxy_index < 0 or self.current_proxy_index >= len(self.proxies):
+            logger.debug("No valid proxy index for sequential selection / all tried (in 'once' mode).")
             return None
         return self.proxies[self.current_proxy_index]
 
     def rotate_proxy(self) -> Optional[ProxyConfig]:
         """
-        Переключается на следующий прокси. Учитывает PROXY_ROTATION_MODE.
-        Возвращает новый прокси или None, если ротация невозможна или не включена.
+        Переключается на следующий прокси для неслучайных режимов. 
+        В режиме select_random_proxy_each_request этот метод не имеет эффекта на индекс и вернет None.
+        Возвращает новый прокси или None, если ротация невозможна/не применима.
         """
-        if not self.active or not self.proxies or self.current_proxy_index < 0 :
+        if not self.active or not self.proxies:
             logger.warning("Cannot rotate proxy: ProxyManager inactive or no proxies loaded.")
             return None
+
+        if self.select_random_proxy_each_request:
+            logger.debug("rotate_proxy called in random selection mode. No index change. Next get_proxy() will be random.")
+            # Возвращаем None, чтобы модуль понял, что "следующего по порядку" нет, и перешел к ротации ключа, если это ошибка.
+            # Или можно вернуть текущий случайный, но это может запутать логику модуля.
+            return None 
+
+        # Логика для неслучайных режимов (once, cycle, failover_cycle)
+        if self.current_proxy_index < 0: # Если индекс еще не инициализирован (маловероятно здесь, но для безопасности)
+            self.current_proxy_index = 0 # Начать с первого
+            new_proxy = self.proxies[self.current_proxy_index]
+            logger.info(f"Proxy index was invalid, reset to 0. Current proxy: {new_proxy['url']}")
+            return new_proxy
 
         self.current_proxy_index += 1
         if self.current_proxy_index < len(self.proxies):
@@ -173,13 +208,12 @@ class ProxyManager:
             logger.info(f"Rotated to next proxy: {new_proxy['url']} (Index: {self.current_proxy_index})")
             return new_proxy
         else: # Индекс вышел за пределы списка
-            if self.current_rotation_mode == "cycle": # Исправлено на current_rotation_mode
-                logger.info("Reached end of proxy list. Cycling back to the first proxy.")
+            if self.current_rotation_mode == "cycle" or self.current_rotation_mode == "failover_cycle": 
+                logger.info(f"Reached end of proxy list in mode '{self.current_rotation_mode}'. Cycling back to the first proxy.")
                 self.current_proxy_index = 0
                 return self.proxies[self.current_proxy_index]
-            else: # Режим "once" (по умолчанию)
+            elif self.current_rotation_mode == "once": 
                 logger.warning("All proxies have been tried (mode 'once'). Cannot rotate further for the current cycle.")
-                # current_proxy_index остается >= len(self.proxies), get_proxy() вернет None
                 return None
             
     def reset_proxies(self):
@@ -192,12 +226,12 @@ class ProxyManager:
             logger.debug("ProxyManager inactive or no proxies to reset.")
             return
 
-        if self.randomize_on_load:
-            random.shuffle(self.proxies)
-            logger.info("Proxies have been re-shuffled during reset.")
+        # Перемешивание удалено из reset_proxies.
+        # Оно происходит только при загрузке, если current_randomize_on_load=True.
+        # reset_proxies теперь только сбрасывает индекс.
         self.current_proxy_index = 0
         current_proxy_url = self.get_proxy()['url'] if self.get_proxy() else 'None'
-        logger.info(f"Proxy index reset. Current proxy: {current_proxy_url}")
+        logger.info(f"Proxy index reset. Current proxy: {current_proxy_url}. List order preserved during reset.")
 
     def set_use_proxies(self, use_proxies: bool):
         """Включает или выключает использование прокси во время выполнения."""
@@ -224,14 +258,25 @@ class ProxyManager:
 
     def set_rotation_mode(self, mode: str):
         """Устанавливает режим ротации прокси во время выполнения и сохраняет в settings.json."""
-        if mode in ["once", "cycle"]:
-            self.current_rotation_mode = mode # Обновляем текущее состояние
+        if mode in ["once", "cycle", "failover_cycle"]: # Добавлен failover_cycle
+            self.current_rotation_mode = mode 
             logger.info(f"Proxy rotation mode set to: {self.current_rotation_mode}")
-            self._save_runtime_settings() # Сохраняем в settings.json
-            # При смене режима, имеет смысл сбросить текущий индекс, чтобы начать с начала списка
+            self._save_runtime_settings() 
             self.reset_proxies() 
         else:
-            logger.warning(f"Invalid proxy rotation mode: {mode}. Mode not changed. Allowed: 'once', 'cycle'.")
+            logger.warning(f"Invalid proxy rotation mode: {mode}. Mode not changed. Allowed: 'once', 'cycle', 'failover_cycle'.")
+
+    def set_select_random_proxy_each_request(self, select_random: bool):
+        """Устанавливает режим выбора прокси (случайный или последовательный) и сохраняет в settings.json."""
+        self.select_random_proxy_each_request = select_random
+        logger.info(f"Proxy selection mode set to: {'random_each_request' if self.select_random_proxy_each_request else 'sequential'}")
+        self._save_runtime_settings()
+        # Перезагрузка прокси здесь не нужна, так как порядок списка не меняется,
+        # а get_proxy() сразу начнет использовать новый режим.
+        # Однако, если мы переключаемся С случайного НА последовательный,
+        # имеет смысл сбросить current_proxy_index, чтобы начать с начала последовательности.
+        if not self.select_random_proxy_each_request:
+            self.reset_proxies() # Сбросить индекс для предсказуемого начала последовательного режима
 
     def _ensure_correct_scheme(self, url: str, proxy_type: str) -> str:
         """Гарантирует, что URL имеет правильную схему для указанного типа прокси."""
@@ -368,6 +413,30 @@ class ProxyManager:
         else: 
             self.active = False
             logger.info("Proxies reloaded, but current_use_proxies is false. ProxyManager remains disabled.")
+
+    def shuffle_proxies_in_memory_and_save(self) -> bool:
+        """
+        Перемешивает текущий список прокси в памяти, сохраняет его в файл
+        и сбрасывает текущий индекс прокси.
+        """
+        if not self.proxies:
+            logger.warning("No proxies to shuffle.")
+            return False
+        
+        logger.info(f"Shuffling {len(self.proxies)} proxies in memory...")
+        random.shuffle(self.proxies)
+        self.current_proxy_index = 0 # Сброс индекса на начало перемешанного списка
+        logger.info("Proxies shuffled. Saving new order to file.")
+        
+        if self._save_proxies_to_file():
+            logger.info(f"Successfully saved shuffled proxy list. Current proxy after shuffle: {self.get_proxy()['url'] if self.get_proxy() else 'None'}")
+            return True
+        else:
+            logger.error("Failed to save shuffled proxy list. Original order might be lost in memory if not reloaded.")
+            # В этом случае, возможно, стоит перезагрузить из файла, чтобы восстановить предыдущее состояние,
+            # но это усложнит логику, так как _save_proxies_to_file уже логирует ошибку.
+            # Пока оставим так: ошибка сохранения будет залогирована, а в памяти останется перемешанный список.
+            return False
 
 
 # Пример использования (для тестирования)

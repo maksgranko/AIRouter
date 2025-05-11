@@ -1,6 +1,26 @@
 [
   {
+    "type": "http",
+    "url": "http://35334354\u043d54\u043d5\u043d45\u043d45\u043d"
+  },
+  {
+    "type": "socks5",
+    "url": "socks5://C111attLe0:lF2131SgS8@146.22.84.231:37914"
+  },
+  {
     "type": "socks5",
     "url": "socks5://Chy5attLe0:lFPoLuSgS8@146.19.84.231:37914"
+  },
+  {
+    "type": "socks5",
+    "url": "socks5://otyeNUlaFp:FvGg7ccHlJ@146.19.84.231:37914"
+  },
+  {
+    "type": "socks5",
+    "url": "socks5://uk7u0TR8mO:bH2DnjHGp0@146.19.84.231:37914"
+  },
+  {
+    "type": "socks5",
+    "url": "socks5://NfgBUyQ8sC:ikNish9hGR@146.19.84.231:37914"
   }
 ]
