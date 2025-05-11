@@ -147,9 +147,10 @@ setup_systemd_service() {
     log_info "Настройка службы systemd ($SERVICE_NAME.service)..."
     SERVICE_FILE_PATH="/etc/systemd/system/$SERVICE_NAME.service"
 
-    # Команда для запуска приложения. Убедитесь, что main.py - это ваш главный скрипт.
-    # Используем абсолютный путь к python из venv и к main.py
-    EXEC_START="$INSTALL_DIR/venv/bin/python $INSTALL_DIR/main.py"
+    # Команда для запуска приложения.
+    # Используем абсолютный путь к python из venv.
+    # Добавляем --host 0.0.0.0, чтобы приложение было доступно извне.
+    EXEC_START="$INSTALL_DIR/venv/bin/python -m uvicorn main:app --host 0.0.0.0 --reload"
 
     cat > "$SERVICE_FILE_PATH" << EOF
 [Unit]

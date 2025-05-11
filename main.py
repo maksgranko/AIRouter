@@ -1,4 +1,5 @@
 import os
+import webbrowser # Для открытия URL в браузере
 import json # Для создания пустых JSON файлов и для SSE
 import inspect # Для проверки типа функции
 from typing import AsyncGenerator, Dict, Any, Optional # Для sse_event_formatter
@@ -16,8 +17,9 @@ import admin_router
 import logging # Добавляем импорт logging
 
 # Настраиваем базовое логирование
-
+open_browser_on_save = False
 logging_type = logging.ERROR
+
 logging.basicConfig(level=logging_type, format='%(levelname)s:%(name)s:%(asctime)s:%(message)s') # Изменено на DEBUG и добавлен asctime
 logger = logging.getLogger(__name__) # Создаем логгер для main.py
 logger.setLevel(logging_type) # Убедимся, что и этот логгер на DEBUG
@@ -196,6 +198,13 @@ if key_manager.get_key("gemini"):
     ))
 else:
     print("Warning: No Gemini API keys found. Gemini module will not be registered.")
+
+# Открываем админ-панель в браузере при запуске
+try:
+    if(open_browser_on_save): 
+        webbrowser.open("http://localhost:8000/admin/dashboard")
+except Exception as e:
+    logger.warning(f"Could not open browser for admin dashboard: {e}")
 
 # Подключаем роутер админ-панели
 app.include_router(admin_router.router)
