@@ -18,7 +18,10 @@
 <body>
     <div class="container">
         <h1>Панель Администратора</h1>
-        <p><a href="{{ url_for('admin_help') }}" class="nav-link" style="float: right; margin-top: -50px;">Справка</a></p>
+        <p style="float: right; margin-top: -50px;">
+            <a href="{{ url_for('admin_models_view') }}" class="nav-link" style="margin-right: 15px;">Список моделей</a>
+            <a href="{{ url_for('admin_help') }}" class="nav-link">Справка</a>
+        </p>
 
         <h2>Настройки Прокси</h2>
         <div class="setting">

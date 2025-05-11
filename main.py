@@ -1,12 +1,32 @@
 import os
+import json # Для создания пустых JSON файлов и для SSE
+import inspect # Для проверки типа функции
+from typing import AsyncGenerator, Dict, Any # Для sse_event_formatter
 from dotenv import load_dotenv # Импортируем load_dotenv
 from fastapi import FastAPI, Request, UploadFile, HTTPException
+from fastapi.responses import StreamingResponse # Для потоковых ответов
 from registry import ModuleRegistry
 from modules.openai_module import OpenAIChatModule
 from modules.gemini_module import GeminiChatModule
 from api_key_manager import ApiKeyManager
 from proxy_manager import ProxyManager
 import admin_router
+import logging # Добавляем импорт logging
+
+# Настраиваем базовое логирование
+logging.basicConfig(level=logging.DEBUG, format='%(levelname)s:%(name)s:%(asctime)s:%(message)s') # Изменено на DEBUG и добавлен asctime
+logger = logging.getLogger(__name__) # Создаем логгер для main.py
+logger.setLevel(logging.DEBUG) # Убедимся, что и этот логгер на DEBUG
+
+# Дополнительно установим уровень для uvicorn логгеров, если они используются
+uvicorn_access_logger = logging.getLogger("uvicorn.access")
+uvicorn_access_logger.setLevel(logging.DEBUG)
+uvicorn_error_logger = logging.getLogger("uvicorn.error")
+uvicorn_error_logger.setLevel(logging.DEBUG)
+# И для модуля gemini, на всякий случай
+gemini_module_logger = logging.getLogger("modules.gemini_module")
+gemini_module_logger.setLevel(logging.DEBUG)
+
 
 # Загружаем переменные окружения из .env файла (если он есть)
 # Это должно быть сделано до того, как переменные окружения используются,
@@ -18,7 +38,7 @@ app = FastAPI()
 # ModuleRegistry теперь инициализируется с путем к файлу настроек в ensure_config_files_exist или после него
 # registry = ModuleRegistry() # Этот вызов будет ниже, после определения SETTINGS_FILE
 
-import json # Для создания пустых JSON файлов
+# CONFIG_DIR и файлы уже определены выше, json импортирован
 
 CONFIG_DIR = "configs"
 SETTINGS_FILE = os.path.join(CONFIG_DIR, "settings.json")
@@ -108,27 +128,92 @@ def get_module(request_data: dict):
     # Это позволяет регистрировать модули по имени сервиса, а в запросе указывать конкретную модель.
     model_identifier = request_data.get("model", "openai") # "openai" - сервис по умолчанию
     
+    # Попытка 1: получить модуль по полному идентификатору модели из запроса
     try:
-        # Попытка 1: получить модуль по полному идентификатору модели из запроса
         module = registry.get(model_identifier)
         return module
     except KeyError:
-        # Попытка 2: если не найдено, извлечь имя сервиса и попробовать по нему
-        # Это полезно, если модуль зарегистрирован как "openai", а в запросе "openai/gpt-3.5-turbo"
-        service_name = model_identifier.split('/')[0]
+        pass # Продолжаем, если не найдено
+
+    # Попытка 2: если в идентификаторе есть '/', извлечь имя сервиса (часть до '/') и попробовать по нему
+    if '/' in model_identifier:
+        service_name_from_slash = model_identifier.split('/')[0]
         try:
-            module = registry.get(service_name)
-            # TODO: В будущем модуль может сам решать, какую под-модель использовать, если service_name != model_identifier
+            module = registry.get(service_name_from_slash)
+            # TODO: В будущем модуль может сам решать, какую под-модель использовать,
+            # если service_name_from_slash != model_identifier
             return module
         except KeyError:
-            raise HTTPException(status_code=400, detail=f"Module for model/service '{model_identifier}' not found or not registered.")
+            pass # Продолжаем, если не найдено
+
+    # Попытка 3: проверить известные префиксы сервисов
+    # Это полезно для моделей типа "gemini-pro", "gemini-1.5-flash", и т.д.
+    # или если модуль зарегистрирован как "openai", а в запросе "gpt-4" (хотя это менее вероятно)
+    known_prefixes = ["gemini", "openai"] # Можно расширить список
+    for prefix in known_prefixes:
+        if model_identifier.startswith(prefix):
+            try:
+                module = registry.get(prefix) # Пытаемся получить модуль по имени сервиса (префиксу)
+                return module
+            except KeyError:
+                # Если модуль для этого префикса не зарегистрирован, это не ошибка,
+                # просто этот префикс не подходит.
+                pass 
+                
+    # Если ни одна из попыток не увенчалась успехом
+    logger.error(f"Failed to find module for model_identifier: '{model_identifier}'. Review request body or ensure module is registered and active.")
+    raise HTTPException(status_code=400, detail=f"Module for model/service '{model_identifier}' not found or not registered.")
+
+
+async def sse_event_formatter(generator: AsyncGenerator[Dict[str, Any], None]) -> AsyncGenerator[str, None]:
+    """
+    Форматирует словари из генератора в Server-Sent Events (SSE) строки.
+    Также обрабатывает исключения из генератора и отправляет ошибку в SSE формате.
+    """
+    try:
+        async for chunk_data in generator:
+            yield f"data: {json.dumps(chunk_data)}\n\n"
+        yield f"data: [DONE]\n\n"
+    except HTTPException as e:
+        logger.error(f"HTTPException during SSE stream generation: {e.detail}", exc_info=False) # Не логгируем полный traceback для HTTPException
+        error_payload = {
+            "error": {
+                "message": e.detail,
+                "type": "api_error", # Можно уточнить тип ошибки
+                "param": None, # Можно добавить, если известно
+                "code": str(e.status_code) # Код ошибки как строка
+            }
+        }
+        yield f"data: {json.dumps(error_payload)}\n\n"
+        yield f"data: [DONE]\n\n" # Важно завершить поток корректно
+    except Exception as e:
+        logger.error(f"Unexpected exception during SSE stream generation: {e}", exc_info=True)
+        error_payload = {
+            "error": {
+                "message": "An unexpected error occurred during streaming.",
+                "type": "internal_server_error",
+                "param": None,
+                "code": "500"
+            }
+        }
+        yield f"data: {json.dumps(error_payload)}\n\n"
+        yield f"data: [DONE]\n\n"
 
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
     body = await request.json()
     module = get_module(body)
-    return await module.chat_completion(body)
+
+    # Проверяем, является ли метод chat_completion асинхронным генератором
+    if inspect.isasyncgenfunction(module.chat_completion):
+        # Если да, используем StreamingResponse
+        # module.chat_completion(body) возвращает сам генератор
+        actual_generator = module.chat_completion(body)
+        return StreamingResponse(sse_event_formatter(actual_generator), media_type="text/event-stream")
+    else:
+        # Если это обычная async функция, вызываем ее через await
+        return await module.chat_completion(body)
 
 @app.post("/v1/completions")
 async def completions(request: Request):

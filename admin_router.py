@@ -1,13 +1,14 @@
 import os
 import secrets
-from typing import Optional
+from typing import Optional, List, Dict, Any
+import httpx # Добавляем httpx
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Form
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import RedirectResponse
 
 # Убираем временные импорты, т.к. менеджеры будут браться из app.state
-# from api_key_manager import ApiKeyManager 
+# from api_key_manager import ApiKeyManager
 # from proxy_manager import ProxyManager
 
 security = HTTPBasic() # Определяем экземпляр HTTPBasic на уровне модуля
@@ -169,3 +170,73 @@ async def admin_help_view(request: Request, username: str = Depends(get_current_
         "proxies_file": proxy_manager.proxy_file_path,
     }
     return templates.TemplateResponse("admin_help.html", context)
+
+# Глобальные переменные для кэширования моделей
+_cached_models_data: Optional[List[Dict[str, Any]]] = None
+_cached_models_error: Optional[str] = None
+
+async def _fetch_and_cache_all_models(request: Request, force_refresh: bool = False):
+    """
+    Получает список моделей от всех активных модулей и кэширует его.
+    """
+    global _cached_models_data, _cached_models_error
+
+    if not force_refresh and _cached_models_data is not None:
+        # Если не принудительное обновление и кэш есть, ничего не делаем
+        # Ошибка также будет из кэша
+        return
+
+    all_models = []
+    current_error = None
+    module_registry = request.app.state.module_registry
+    
+    try:
+        for mod in module_registry.all_active_modules():
+            try:
+                models_response = await mod.list_models() # Это должно быть await, если list_models асинхронный
+                if isinstance(models_response, dict) and "data" in models_response:
+                    all_models.extend(models_response.get("data", []))
+                else:
+                    # Логируем, если модуль вернул что-то неожиданное
+                    print(f"Warning: Module {mod.get_name()} returned unexpected format from list_models: {models_response}")
+            except Exception as e:
+                print(f"Error fetching models from module {mod.get_name()}: {e}")
+                # Сохраняем первую возникшую ошибку, чтобы показать пользователю
+                if not current_error:
+                    current_error = f"Ошибка при получении моделей от модуля {mod.get_name()}: {str(e)}"
+        
+        if not all_models and not current_error:
+             # Если список пуст, но ошибок не было, это может быть нормально
+             pass # _cached_models_error останется None или предыдущей ошибкой, если она была
+        
+        _cached_models_data = all_models
+        _cached_models_error = current_error # Обновляем кэш ошибки
+
+    except Exception as e:
+        # Общая ошибка при итерации или доступе к registry
+        _cached_models_data = [] # Сбрасываем данные моделей в случае общей ошибки
+        _cached_models_error = f"Общая ошибка при получении списка моделей: {str(e)}"
+
+
+@router.get("/models", name="admin_models_view")
+async def admin_models_view_page(request: Request, username: str = Depends(get_current_username)):
+    # При первом заходе или если кэш пуст, _fetch_and_cache_all_models его заполнит
+    # force_refresh=False означает, что если кэш уже есть, он будет использован
+    # Если кэш пуст (_cached_models_data is None), то он будет заполнен.
+    if _cached_models_data is None: # Только если кэш абсолютно пуст, делаем первоначальную загрузку
+        await _fetch_and_cache_all_models(request, force_refresh=True)
+
+    context = {
+        "request": request,
+        "username": username,
+        "models": _cached_models_data,
+        "error_message": _cached_models_error
+    }
+    return templates.TemplateResponse("admin_models.html", context)
+
+@router.post("/models/refresh", name="admin_refresh_models")
+async def admin_refresh_models_action(request: Request):
+    # Принудительно обновляем кэш
+    await _fetch_and_cache_all_models(request, force_refresh=True)
+    # Перенаправляем на GET-эндпоинт, который использует обновленный кэш
+    return RedirectResponse(url=router.url_path_for("admin_models_view"), status_code=status.HTTP_303_SEE_OTHER)
