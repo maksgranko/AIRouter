@@ -171,6 +171,50 @@
             <p>Отключение модуля сделает его недоступным для запросов через API.</p>
         </div>
 
+        <h2>Безопасность AIRouter API</h2>
+        <div class="setting">
+            <form action="{{ url_for('toggle_airouter_api_key_requirement') }}" method="post" style="display: inline-block; margin-right: 10px;">
+                <label for="require_airouter_api_key" class="setting-name">Требовать API-ключ AIRouter для доступа:</label>
+                <select name="require_airouter_api_key" id="require_airouter_api_key">
+                    <option value="true" {% if require_airouter_api_key %}selected{% endif %}>Да (Рекомендуется)</option>
+                    <option value="false" {% if not require_airouter_api_key %}selected{% endif %}>Нет</option>
+                </select>
+                <button type="submit">Применить</button>
+            </form>
+            <br>
+            <small>Текущий статус: <span class="setting-value">{% if require_airouter_api_key %}Требуется API-ключ{% else %}API-ключ не требуется{% endif %}</span></small>
+        </div>
+        <div class="instructions">
+            <p>Если включено, все запросы к API (кроме админ-панели) должны содержать валидный API-ключ AIRouter в заголовке <code>Authorization: Bearer <ключ></code>.</p>
+        </div>
+
+        {% if require_airouter_api_key %}
+        <div class="setting">
+            <h3 style="color: #333;">API-ключи AIRouter (из файла: {{ airouter_keys_file }})</h3>
+            {% if airouter_api_keys %}
+                <ul style="list-style-type: none; padding-left: 0;">
+                {% for key in airouter_api_keys %}
+                    <li style="margin-bottom: 5px; display: flex; justify-content: space-between; align-items: center;">
+                        <span style="word-break: break-all; margin-right: 10px;">{{ key }}</span>
+                        <form action="{{ url_for('manage_airouter_api_key') }}" method="post" style="display: inline;">
+                            <input type="hidden" name="api_key" value="{{ key }}">
+                            <button type="submit" name="action" value="remove_key" onclick="return confirm('Вы уверены, что хотите удалить этот API-ключ AIRouter?');">Удалить</button>
+                        </form>
+                    </li>
+                {% endfor %}
+                </ul>
+            {% else %}
+                <p>Нет API-ключей AIRouter. Сгенерируйте новый.</p>
+            {% endif %}
+            <form action="{{ url_for('manage_airouter_api_key') }}" method="post" style="margin-top: 10px;">
+                <button type="submit" name="action" value="generate_and_add">Сгенерировать и добавить новый API-ключ AIRouter</button>
+            </form>
+        </div>
+        <div class="instructions">
+            <p>Добавление или удаление ключей обновляет файл <code>{{ airouter_keys_file }}</code>. Приложение будет использовать эти ключи для аутентификации, если требование API-ключа включено.</p>
+        </div>
+        {% endif %}
+
     </div>
 </body>
 </html>

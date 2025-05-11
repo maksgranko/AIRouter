@@ -1,9 +1,13 @@
 import os
+import json # <--- Добавлено для работы с settings.json
 import secrets
 from typing import Optional, List, Dict, Any
 import httpx # Добавляем httpx
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Form
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
+# <--- Убедимся, что AIRouterApiKeyManager импортирован, если он нужен напрямую,
+# но обычно он будет доступен через request.app.state
+# from airouter_key_manager import AIRouterApiKeyManager 
 from fastapi.templating import Jinja2Templates
 from fastapi.responses import RedirectResponse
 
@@ -54,24 +58,35 @@ templates = Jinja2Templates(directory="templates")
 
 @router.get("/dashboard", name="admin_dashboard") 
 async def admin_dashboard_view(request: Request, username: str = Depends(get_current_username)):
-    key_manager = request.app.state.key_manager # Исправлено дублирование
+    key_manager = request.app.state.key_manager
     proxy_manager = request.app.state.proxy_manager
     module_registry = request.app.state.module_registry
+    airouter_key_manager = request.app.state.airouter_key_manager # <--- Добавлено
+    settings_file_path = request.app.state.settings_file_path # <--- Добавлено
     
     proxy_status_text = "Включено" if proxy_manager.active else "Выключено"
     
     service_api_keys_info = {}
-    for service_name_iter in key_manager.key_files.keys(): # Используем другое имя переменной
+    for service_name_iter in key_manager.key_files.keys():
         service_api_keys_info[service_name_iter] = key_manager.api_keys.get(service_name_iter, [])
+
+    # Чтение require_airouter_api_key из settings.json
+    require_airouter_api_key = False
+    try:
+        with open(settings_file_path, 'r') as f:
+            settings_data = json.load(f)
+            require_airouter_api_key = settings_data.get("require_airouter_api_key", False)
+    except Exception as e:
+        print(f"Error reading settings for admin dashboard: {e}") # Логирование ошибки
 
     context = {
         "request": request,
         "username": username,
-        "proxy_manager_is_active": proxy_manager.active, 
+        "proxy_manager_is_active": proxy_manager.active,
         "proxy_manager_active_status": proxy_status_text,
-        "current_proxy_rotation_mode": proxy_manager.current_rotation_mode, # Исправлено
-        "initial_use_proxies_env": str(os.getenv("USE_PROXIES", "true")).lower(), # Читаем из env напрямую
-        "initial_proxy_rotation_mode_env": os.getenv("PROXY_ROTATION_MODE", "once").lower(), # Читаем из env напрямую
+        "current_proxy_rotation_mode": proxy_manager.current_rotation_mode,
+        "initial_use_proxies_env": str(os.getenv("USE_PROXIES", "true")).lower(),
+        "initial_proxy_rotation_mode_env": os.getenv("PROXY_ROTATION_MODE", "once").lower(),
         
         "openai_keys_file": key_manager.key_files.get("openai", "N/A"),
         "openai_keys_count": len(key_manager.api_keys.get("openai", [])),
@@ -82,8 +97,12 @@ async def admin_dashboard_view(request: Request, username: str = Depends(get_cur
 
         "proxies_file": proxy_manager.proxy_file_path,
         "proxies_count": len(proxy_manager.proxies),
-        "current_proxies_list": proxy_manager.proxies, # Передаем список прокси
-        "module_statuses": module_registry.get_all_module_statuses()
+        "current_proxies_list": proxy_manager.proxies,
+        "module_statuses": module_registry.get_all_module_statuses(),
+
+        "airouter_api_keys": airouter_key_manager.get_all_keys(), # <--- Добавлено
+        "require_airouter_api_key": require_airouter_api_key, # <--- Добавлено
+        "airouter_keys_file": airouter_key_manager.keys_file_path # <--- Добавлено
     }
     return templates.TemplateResponse("admin_dashboard.html", context)
 
@@ -131,9 +150,52 @@ async def manage_api_key_form(
             key_manager.add_key(service_name, api_key.strip())
         # Можно добавить flash-сообщение об успехе/ошибке
     elif action == "remove_key":
-        key_manager.remove_key(service_name, api_key) # api_key здесь - это ключ для удаления
+        key_manager.remove_key(service_name, api_key)
         
     return RedirectResponse(url=router.url_path_for("admin_dashboard"), status_code=status.HTTP_303_SEE_OTHER)
+
+
+# --- Управление API ключами AIRouter ---
+@router.post("/dashboard/airouter_keys", name="manage_airouter_api_key")
+async def manage_airouter_api_key_form(
+    request: Request,
+    action: str = Form(...),
+    api_key_to_remove: Optional[str] = Form(None, alias="api_key") # Ключ для удаления
+):
+    airouter_key_manager = request.app.state.airouter_key_manager
+    
+    if action == "generate_and_add":
+        airouter_key_manager.generate_and_add_key()
+    elif action == "remove_key" and api_key_to_remove:
+        airouter_key_manager.remove_key(api_key_to_remove)
+        
+    return RedirectResponse(url=router.url_path_for("admin_dashboard"), status_code=status.HTTP_303_SEE_OTHER)
+
+@router.post("/dashboard/settings/airouter_security", name="toggle_airouter_api_key_requirement")
+async def toggle_airouter_api_key_requirement_form(
+    request: Request,
+    require_airouter_api_key_str: str = Form(..., alias="require_airouter_api_key")
+):
+    settings_file_path = request.app.state.settings_file_path
+    require_airouter_api_key_bool = require_airouter_api_key_str.lower() == "true"
+    
+    try:
+        with open(settings_file_path, 'r') as f:
+            settings_data = json.load(f)
+        
+        settings_data["require_airouter_api_key"] = require_airouter_api_key_bool
+        
+        with open(settings_file_path, 'w') as f:
+            json.dump(settings_data, f, indent=2)
+            
+    except Exception as e:
+        # Здесь можно добавить обработку ошибок, например, flash-сообщение
+        print(f"Error updating AIRouter API key requirement: {e}") # Логирование
+        raise HTTPException(status_code=500, detail="Could not update AIRouter API key requirement settings.")
+
+    return RedirectResponse(url=router.url_path_for("admin_dashboard"), status_code=status.HTTP_303_SEE_OTHER)
+# --- Конец управления API ключами AIRouter ---
+
 
 @router.post("/dashboard/proxies", name="manage_proxy_list")
 async def manage_proxy_list_form(
