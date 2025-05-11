@@ -106,7 +106,8 @@ async def admin_dashboard_view(request: Request, username: str = Depends(get_cur
 
         "airouter_api_keys": airouter_key_manager.get_all_keys(), # <--- Добавлено
         "require_airouter_api_key": require_airouter_api_key, # <--- Добавлено
-        "airouter_keys_file": airouter_key_manager.keys_file_path # <--- Добавлено
+        "airouter_keys_file": airouter_key_manager.keys_file_path, # <--- Добавлено
+        "app_version": request.app.state.app_version # <--- Добавлена версия приложения
     }
     return templates.TemplateResponse("admin_dashboard.html", context)
 
@@ -258,6 +259,7 @@ async def admin_help_view(request: Request, username: str = Depends(get_current_
         "openai_keys_file": key_manager.key_files.get("openai", "openai_keys.json"),
         "gemini_keys_file": key_manager.key_files.get("gemini", "gemini_keys.json"),
         "proxies_file": proxy_manager.proxy_file_path,
+        "app_version": request.app.state.app_version # <--- Добавлена версия приложения
     }
     return templates.TemplateResponse("admin_help.html", context)
 
@@ -320,7 +322,8 @@ async def admin_models_view_page(request: Request, username: str = Depends(get_c
         "request": request,
         "username": username,
         "models": _cached_models_data,
-        "error_message": _cached_models_error
+        "error_message": _cached_models_error,
+        "app_version": request.app.state.app_version # <--- Добавлена версия приложения
     }
     return templates.TemplateResponse("admin_models.html", context)
 
