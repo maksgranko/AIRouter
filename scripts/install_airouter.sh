@@ -34,6 +34,68 @@ check_root() {
     log_info "Права суперпользователя подтверждены."
 }
 
+# Функция для удаления предыдущей установки
+uninstall_previous_version() {
+    log_info "Проверка наличия предыдущей установки $APP_NAME..."
+
+    # Проверка и остановка службы
+    if systemctl is-active --quiet "$SERVICE_NAME.service"; then
+        log_info "Остановка службы $SERVICE_NAME..."
+        systemctl stop "$SERVICE_NAME.service"
+        if [ $? -ne 0 ]; then
+            log_warning "Не удалось остановить службу $SERVICE_NAME. Продолжаем..."
+        else
+            log_info "Служба $SERVICE_NAME успешно остановлена."
+        fi
+    fi
+
+    # Проверка и отключение службы
+    if systemctl is-enabled --quiet "$SERVICE_NAME.service"; then
+        log_info "Отключение службы $SERVICE_NAME из автозапуска..."
+        systemctl disable "$SERVICE_NAME.service"
+        if [ $? -ne 0 ]; then
+            log_warning "Не удалось отключить службу $SERVICE_NAME. Продолжаем..."
+        else
+            log_info "Служба $SERVICE_NAME успешно отключена."
+        fi
+    fi
+
+    # Удаление файла службы
+    SERVICE_FILE_PATH="/etc/systemd/system/$SERVICE_NAME.service"
+    if [ -f "$SERVICE_FILE_PATH" ]; then
+        log_info "Удаление файла службы $SERVICE_FILE_PATH..."
+        rm -f "$SERVICE_FILE_PATH"
+        if [ $? -ne 0 ]; then
+            log_warning "Не удалось удалить файл службы $SERVICE_FILE_PATH. Продолжаем..."
+        else
+            log_info "Файл службы $SERVICE_FILE_PATH успешно удален."
+            log_info "Перезагрузка конфигурации systemd после удаления службы..."
+            systemctl daemon-reload
+        fi
+    fi
+
+    # Удаление директории установки
+    if [ -d "$INSTALL_DIR" ]; then
+        log_info "Удаление предыдущей директории установки $INSTALL_DIR..."
+        rm -rf "$INSTALL_DIR"
+        if [ $? -ne 0 ]; then
+            log_error "Не удалось удалить директорию $INSTALL_DIR. Проверьте права и попробуйте снова."
+            # Решаем, стоит ли прерывать скрипт, если не удалось удалить директорию
+            # exit 1 
+        else
+            log_info "Директория $INSTALL_DIR успешно удалена."
+        fi
+    else
+        log_info "Предыдущая директория установки $INSTALL_DIR не найдена."
+    fi
+}
+
+# Функция для вывода предупреждений (новая)
+log_warning() {
+    echo "[WARNING] $1" >&2
+}
+
+
 # Создание директории установки
 create_install_dir() {
     if [ -d "$INSTALL_DIR" ]; then
@@ -200,11 +262,24 @@ main() {
     log_info "Запуск установки $APP_NAME..."
 
     check_root
+    uninstall_previous_version # <--- Вызов новой функции
     create_install_dir
     copy_app_files
     install_python
     setup_venv_and_dependencies
     prompt_for_service_user
+
+    # Изменение владельца директории установки на пользователя службы
+    log_info "Изменение владельца $INSTALL_DIR на $SERVICE_USER..."
+    chown -R "$SERVICE_USER":"$(id -gn "$SERVICE_USER")" "$INSTALL_DIR"
+    if [ $? -ne 0 ]; then
+        log_error "Не удалось изменить владельца $INSTALL_DIR на $SERVICE_USER."
+        # Можно добавить выход из скрипта, если это критично
+        # exit 1
+    else
+        log_info "Владелец $INSTALL_DIR успешно изменен на $SERVICE_USER."
+    fi
+
     setup_systemd_service
 
     log_info ""
