@@ -11,7 +11,7 @@ from registry import ModuleRegistry
 from modules.openai_module import OpenAIChatModule
 from modules.gemini_module import GeminiChatModule
 from api_key_manager import ApiKeyManager
-from proxy_manager import ProxyManager
+from proxy_manager import ProxyManager 
 from airouter_key_manager import AIRouterApiKeyManager # <--- Добавлено
 import admin_router
 import logging # Добавляем импорт logging
