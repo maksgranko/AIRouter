@@ -1,31 +1,35 @@
 import os
 import json # Для создания пустых JSON файлов и для SSE
 import inspect # Для проверки типа функции
-from typing import AsyncGenerator, Dict, Any # Для sse_event_formatter
+from typing import AsyncGenerator, Dict, Any, Optional # Для sse_event_formatter
 from dotenv import load_dotenv # Импортируем load_dotenv
-from fastapi import FastAPI, Request, UploadFile, HTTPException
-from fastapi.responses import StreamingResponse # Для потоковых ответов
+from fastapi import FastAPI, Request, UploadFile, HTTPException, Depends
+from fastapi.responses import StreamingResponse, JSONResponse # Для потоковых ответов и JSON ответов
+from fastapi.security.http import HTTPBearer, HTTPAuthorizationCredentials
 from registry import ModuleRegistry
 from modules.openai_module import OpenAIChatModule
 from modules.gemini_module import GeminiChatModule
 from api_key_manager import ApiKeyManager
 from proxy_manager import ProxyManager
+from airouter_key_manager import AIRouterApiKeyManager # <--- Добавлено
 import admin_router
 import logging # Добавляем импорт logging
 
 # Настраиваем базовое логирование
-logging.basicConfig(level=logging.DEBUG, format='%(levelname)s:%(name)s:%(asctime)s:%(message)s') # Изменено на DEBUG и добавлен asctime
+
+logging_type = logging.ERROR
+logging.basicConfig(level=logging_type, format='%(levelname)s:%(name)s:%(asctime)s:%(message)s') # Изменено на DEBUG и добавлен asctime
 logger = logging.getLogger(__name__) # Создаем логгер для main.py
-logger.setLevel(logging.DEBUG) # Убедимся, что и этот логгер на DEBUG
+logger.setLevel(logging_type) # Убедимся, что и этот логгер на DEBUG
 
 # Дополнительно установим уровень для uvicorn логгеров, если они используются
 uvicorn_access_logger = logging.getLogger("uvicorn.access")
-uvicorn_access_logger.setLevel(logging.DEBUG)
+uvicorn_access_logger.setLevel(logging_type)
 uvicorn_error_logger = logging.getLogger("uvicorn.error")
-uvicorn_error_logger.setLevel(logging.DEBUG)
+uvicorn_error_logger.setLevel(logging_type)
 # И для модуля gemini, на всякий случай
 gemini_module_logger = logging.getLogger("modules.gemini_module")
-gemini_module_logger.setLevel(logging.DEBUG)
+gemini_module_logger.setLevel(logging_type)
 
 
 # Загружаем переменные окружения из .env файла (если он есть)
@@ -35,6 +39,10 @@ load_dotenv()
 
 # app и registry создаются один раз здесь
 app = FastAPI()
+
+# Схема аутентификации Bearer
+bearer_scheme = HTTPBearer()
+
 # ModuleRegistry теперь инициализируется с путем к файлу настроек в ensure_config_files_exist или после него
 # registry = ModuleRegistry() # Этот вызов будет ниже, после определения SETTINGS_FILE
 
@@ -58,9 +66,19 @@ def ensure_config_files_exist():
         PROXIES_FILE: [],
         SETTINGS_FILE: {
             "proxy_settings": {"use_proxies": True, "rotation_mode": "once"},
-            "module_statuses": {"openai": True, "gemini": True}
+            "module_statuses": {"openai": True, "gemini": True},
+            "require_airouter_api_key": False # <--- Добавлено значение по умолчанию
         }
     }
+    # Создаем файл для ключей AIRouter, если его нет
+    airouter_keys_file_path = os.path.join(CONFIG_DIR, "airouter_api_keys.json")
+    if not os.path.exists(airouter_keys_file_path):
+        try:
+            with open(airouter_keys_file_path, 'w') as f:
+                json.dump([], f)
+            print(f"Created default config file: {airouter_keys_file_path}")
+        except Exception as e:
+            print(f"Error creating default config file {airouter_keys_file_path}: {e}")
 
     for file_path, default_content in default_files_content.items():
         if not os.path.exists(file_path):
@@ -83,14 +101,78 @@ key_manager = ApiKeyManager({
     "gemini": GEMINI_KEYS_FILE
 })
 proxy_manager = ProxyManager(
-    proxy_file_path=PROXIES_FILE, 
+    proxy_file_path=PROXIES_FILE,
     settings_file_path=SETTINGS_FILE
-) 
+)
+airouter_key_manager = AIRouterApiKeyManager() # <--- Добавлено
 
 # Сохраняем менеджеры и реестр модулей в состоянии приложения
 app.state.key_manager = key_manager
 app.state.proxy_manager = proxy_manager
 app.state.module_registry = registry
+app.state.airouter_key_manager = airouter_key_manager # <--- Добавлено
+app.state.settings_file_path = SETTINGS_FILE # <--- Добавлено для доступа к настройкам
+
+
+# Middleware для проверки API ключа AIRouter
+@app.middleware("http")
+async def check_airouter_api_key(request: Request, call_next):
+    # Пропускаем проверку для админ-панели и статических файлов (если они есть)
+    if request.url.path.startswith("/admin") or request.url.path.startswith("/static"):
+        response = await call_next(request)
+        return response
+
+    # Проверяем, нужно ли требовать ключ
+    try:
+        with open(app.state.settings_file_path, 'r') as f:
+            settings = json.load(f)
+        require_key = settings.get("require_airouter_api_key", False)
+    except Exception:
+        # В случае ошибки чтения файла настроек, по умолчанию требуем ключ для безопасности
+        # или можно логировать и пропускать, в зависимости от политики
+        logger.error(f"Could not read settings file at {app.state.settings_file_path} for API key check. Denying access by default.")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Server configuration error, cannot verify API key requirement."}
+        )
+
+    if require_key:
+        try:
+            auth_header: Optional[HTTPAuthorizationCredentials] = await bearer_scheme(request)
+        except HTTPException as e:
+            # Если bearer_scheme вызвал ошибку (например, 403 "Not authenticated" из-за отсутствия/неверного формата заголовка)
+            # мы вернем 401 с нашим сообщением.
+            logger.warning(f"Authorization header issue for {request.url.path}: {e.detail}")
+            return JSONResponse(
+                status_code=401, # Стандартный код для проблем с аутентификацией
+                content={"Error": "Authorization header is missing or invalid. Use Bearer token."},
+                headers={"WWW-Authenticate": "Bearer"}, # Важно для 401
+            )
+        
+        # Эта проверка может быть избыточной, так как bearer_scheme должен сам вызывать HTTPException
+        # если заголовок отсутствует или схема не "bearer".
+        # Однако, для явности и подстраховки можно оставить.
+        if not auth_header: # auth_header будет None, если bearer_scheme не смог его извлечь и не вызвал исключение (маловероятно)
+            logger.warning(f"Authorization header could not be processed for {request.url.path}")
+            return JSONResponse(
+                status_code=401,
+                content={"Error": "Not authenticated. Bearer token could not be processed."},
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        token = auth_header.credentials
+        air_key_manager: AIRouterApiKeyManager = request.app.state.airouter_key_manager
+        
+        if not air_key_manager.key_exists(token):
+            logger.warning(f"Invalid API Key received: '{token}' for {request.url.path}")
+            return JSONResponse(
+                status_code=403,
+                content={"Error": "Auth data is not valid. Check API-Key on dashboard."}
+            )
+        logger.debug(f"Valid API Key received for {request.url.path}")
+
+    response = await call_next(request)
+    return response
 
 # Регистрация модулей API
 # ModuleRegistry теперь сам загрузит статусы активности из settings.json

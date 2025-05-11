@@ -187,30 +187,50 @@ class GeminiChatModule(BaseModule):
 
                             # Если статус 200, начинаем читать поток
                             logger.debug(f"Gemini _execute_streaming_with_rotation: Status 200. Reading stream lines for key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}")
-                            line_count = 0
-                            data_line_count = 0
-                            async for line in response.aiter_lines():
-                                line_count += 1
-                                logger.debug(f"Gemini _execute_streaming_with_rotation: Received line #{line_count}: '{line}'")
-                                if line.startswith("data: "):
-                                    data_line_count +=1
-                                    json_data_str = line[len("data: "):].strip()
-                                    if json_data_str:
-                                        try:
-                                            parsed_chunk = json.loads(json_data_str)
-                                            logger.debug(f"Gemini _execute_streaming_with_rotation: Yielding parsed chunk: {parsed_chunk}")
-                                            yield parsed_chunk
-                                        except json.JSONDecodeError:
-                                            logger.warning(f"Gemini _execute_streaming_with_rotation: Failed to parse JSON from Gemini stream: '{json_data_str}'")
-                                    else:
-                                        logger.debug(f"Gemini _execute_streaming_with_rotation: Received 'data:' line but content was empty or whitespace.")
-                                elif not line.strip():
-                                    logger.debug(f"Gemini _execute_streaming_with_rotation: Received empty line, continuing.")
-                                    continue
-                                else:
-                                    logger.debug(f"Gemini _execute_streaming_with_rotation: Received non-data, non-empty line: '{line}'")
+                            line_count = 0 # Считает количество текстовых чанков, полученных от httpx
+                            data_chunk_count = 0 # Считает количество успешно распарсенных и выданных JSON-объектов
+                            json_buffer = ""
                             
-                            logger.info(f"Gemini API stream successful for {self.service_name} with key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}. Total lines read: {line_count}, data lines processed: {data_line_count}.")
+                            # Читаем весь поток как текст
+                            async for text_chunk in response.aiter_text():
+                                line_count += 1 
+                                json_buffer += text_chunk
+                                logger.debug(f"Gemini _execute_streaming_with_rotation: Appended text chunk #{line_count} (length {len(text_chunk)}). Current buffer size: {len(json_buffer)}")
+                            
+                            logger.info(f"Gemini _execute_streaming_with_rotation: Full response buffer received (length {len(json_buffer)}). Attempting to parse as JSON array.")
+                            # logger.debug(f"Full buffer content: {json_buffer}") # Раскомментировать для очень детальной отладки всего буфера
+
+                            if not json_buffer.strip():
+                                logger.warning("Gemini _execute_streaming_with_rotation: Stream buffer is empty after reading.")
+                                return
+
+                            try:
+                                # Gemini API возвращает массив JSON-объектов: [{obj1}, {obj2}, ..., {objN}]
+                                full_response_array = json.loads(json_buffer)
+                                
+                                if isinstance(full_response_array, list):
+                                    if not full_response_array:
+                                        logger.warning("Gemini _execute_streaming_with_rotation: Parsed an empty list from stream.")
+                                    for item in full_response_array:
+                                        if isinstance(item, dict):
+                                            data_chunk_count += 1
+                                            logger.debug(f"Gemini _execute_streaming_with_rotation: Yielding item from parsed array: {item}")
+                                            yield item
+                                        else:
+                                            logger.warning(f"Gemini _execute_streaming_with_rotation: Item in parsed array is not a dict: {type(item)}. Item: {str(item)[:200]}")
+                                elif isinstance(full_response_array, dict): 
+                                    logger.warning("Gemini _execute_streaming_with_rotation: Expected a list of objects from stream, but got a single dict. Yielding it.")
+                                    data_chunk_count += 1
+                                    yield full_response_array
+                                else:
+                                    logger.error(f"Gemini _execute_streaming_with_rotation: Parsed stream content is not a list or dict. Type: {type(full_response_array)}. Buffer (start): {json_buffer[:200]}")
+                                    raise HTTPException(status_code=500, detail="Gemini API stream did not return a valid JSON array or object.")
+
+                            except json.JSONDecodeError as e:
+                                logger.error(f"Gemini _execute_streaming_with_rotation: Failed to parse JSON from Gemini stream buffer. Error: {e}. Buffer (start): '{json_buffer[:500]}...'")
+                                raise HTTPException(status_code=500, detail=f"Failed to parse Gemini API response stream: {e}")
+                            
+                            logger.info(f"Gemini API stream processing finished for {self.service_name} with key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}. Text chunks read: {line_count}, data chunks processed: {data_chunk_count}.")
                             return
 
                 except httpx.RequestError as e: # Ошибки соединения до получения ответа
@@ -287,22 +307,39 @@ class GeminiChatModule(BaseModule):
         try:
             async for gemini_chunk in self._execute_streaming_with_rotation(f"/{model_to_use}:streamGenerateContent", payload):
                 gemini_chunk_counter += 1
-                logger.debug(f"Gemini chat_completion ({chat_id}): Received Gemini chunk #{gemini_chunk_counter}: {gemini_chunk}")
+                logger.debug(f"Gemini chat_completion ({chat_id}): Received Gemini chunk #{gemini_chunk_counter} from _execute_streaming_with_rotation: {gemini_chunk}")
                 last_gemini_chunk_for_metadata = gemini_chunk 
                 
-                text_delta = ""
-                if gemini_chunk.get("candidates"):
-                    candidate = gemini_chunk["candidates"][0]
+                current_text_in_chunk = ""
+                # gemini_chunk теперь это один из объектов массива, возвращаемого Gemini API
+                if isinstance(gemini_chunk, dict) and gemini_chunk.get("candidates"):
+                    candidate = gemini_chunk["candidates"][0] # Берем первого кандидата
                     if candidate.get("content") and candidate["content"].get("parts"):
-                        part_text = candidate["content"]["parts"][0].get("text", "")
-                        if part_text.startswith(accumulated_text):
-                            text_delta = part_text[len(accumulated_text):]
-                        else: 
-                            text_delta = part_text 
-                            accumulated_text = "" 
-                        accumulated_text += text_delta
+                        # Собираем текст из всех parts, если их несколько (хотя обычно одна для текстовых моделей)
+                        for part in candidate["content"]["parts"]:
+                            current_text_in_chunk += part.get("text", "")
                 
-                if text_delta: 
+                text_delta = ""
+                if current_text_in_chunk:
+                    # Логика для извлечения дельты, если Gemini присылает нарастающий итог
+                    if current_text_in_chunk.startswith(accumulated_text):
+                        text_delta = current_text_in_chunk[len(accumulated_text):]
+                    else:
+                        # Если текст не начинается с накопленного, это может быть новый блок текста
+                        # или Gemini присылает только фактические дельты.
+                        # Для Gemini, который обычно присылает полные фрагменты в каждом чанке потока,
+                        # эта ветка (else) означает, что пришел новый, не связанный с предыдущим, фрагмент,
+                        # либо это самый первый фрагмент.
+                        text_delta = current_text_in_chunk
+                        # Сбрасываем accumulated_text, так как current_text_in_chunk не является его продолжением
+                        # accumulated_text = "" # Это может быть неверно, если Gemini шлет только дельты.
+                                            # Пока оставим так, чтобы увидеть, что приходит.
+                                            # Если Gemini шлет только дельты, то accumulated_text не нужно сбрасывать,
+                                            # а text_delta всегда будет равен current_text_in_chunk.
+
+                    accumulated_text += text_delta # Обновляем накопленный текст, добавляя только реальную дельту
+                
+                if text_delta: # Отправляем чанк, только если есть реальное изменение текста
                     content_chunk_to_yield = {
                         "id": chat_id,
                         "object": "chat.completion.chunk",
