@@ -328,50 +328,117 @@ class GeminiChatModule(BaseModule):
 
                             # Если статус 200, начинаем читать поток
                             logger.info(f"Gemini API stream successful (status 200) for key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}. Reading stream.")
-                            line_count = 0 # Считает количество текстовых чанков, полученных от httpx
-                            data_chunk_count = 0 # Считает количество успешно распарсенных и выданных JSON-объектов
-                            json_buffer = ""
+                            raw_lines_read_count = 0 # Считает количество сырых строк, полученных от httpx.aiter_lines()
+                            yielded_data_chunk_count = 0 # Считает количество успешно распарсенных и выданных JSON-объектов
                             
-                            # Читаем весь поток как текст
+                            # Если статус 200, начинаем читать поток
+                            logger.info(f"Gemini API stream successful (status 200) for key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}. Processing stream for JSON objects.")
+                            
+                            buffer = ""
+                            brace_level = 0
+                            object_start_index = -1
+                            array_started = False
+                            yielded_data_chunk_count = 0
+
                             async for text_chunk in response.aiter_text():
-                                line_count += 1 
-                                json_buffer += text_chunk
-                                logger.debug(f"Gemini _execute_streaming_with_rotation: Appended text chunk #{line_count} (length {len(text_chunk)}). Current buffer size: {len(json_buffer)}")
-                            
-                            logger.info(f"Gemini _execute_streaming_with_rotation: Full response buffer received (length {len(json_buffer)}). Attempting to parse as JSON array.")
-                            # logger.debug(f"Full buffer content: {json_buffer}") # Раскомментировать для очень детальной отладки всего буфера
-
-                            if not json_buffer.strip():
-                                logger.warning("Gemini _execute_streaming_with_rotation: Stream buffer is empty after reading.")
-                                return
-
-                            try:
-                                # Gemini API возвращает массив JSON-объектов: [{obj1}, {obj2}, ..., {objN}]
-                                full_response_array = json.loads(json_buffer)
+                                logger.debug(f"Gemini stream: Received text_chunk (length {len(text_chunk)}): '{text_chunk[:100]}...'")
+                                buffer += text_chunk
                                 
-                                if isinstance(full_response_array, list):
-                                    if not full_response_array:
-                                        logger.warning("Gemini _execute_streaming_with_rotation: Parsed an empty list from stream.")
-                                    for item in full_response_array:
-                                        if isinstance(item, dict):
-                                            data_chunk_count += 1
-                                            logger.debug(f"Gemini _execute_streaming_with_rotation: Yielding item from parsed array: {item}")
-                                            yield item
+                                # Process the buffer to extract complete JSON objects
+                                while True: # Loop to process as many objects as possible from current buffer
+                                    if not array_started:
+                                        stripped_buffer = buffer.lstrip()
+                                        if not stripped_buffer: # Buffer is empty or all whitespace after stripping
+                                            break 
+                                        if stripped_buffer.startswith('['):
+                                            array_started = True
+                                            buffer = stripped_buffer[1:] # Consume the '['
+                                            object_start_index = -1 
+                                            brace_level = 0
+                                            logger.debug("Gemini stream: JSON array started.")
+                                            continue # Restart inner loop to process (now modified) buffer
                                         else:
-                                            logger.warning(f"Gemini _execute_streaming_with_rotation: Item in parsed array is not a dict: {type(item)}. Item: {str(item)[:200]}")
-                                elif isinstance(full_response_array, dict): 
-                                    logger.warning("Gemini _execute_streaming_with_rotation: Expected a list of objects from stream, but got a single dict. Yielding it.")
-                                    data_chunk_count += 1
-                                    yield full_response_array
-                                else:
-                                    logger.error(f"Gemini _execute_streaming_with_rotation: Parsed stream content is not a list or dict. Type: {type(full_response_array)}. Buffer (start): {json_buffer[:200]}")
-                                    raise HTTPException(status_code=500, detail="Gemini API stream did not return a valid JSON array or object.")
+                                            # '[' not found yet. If buffer is large, it's an error. Otherwise, wait for more data.
+                                            if len(buffer) > 1024*5 and not buffer.isspace(): # Increased safety break, ignore if all whitespace
+                                                logger.error(f"Gemini stream error: Expected '[' at start of JSON array, got '{buffer[:50]}...' after significant data.")
+                                                raise HTTPException(status_code=500, detail="Gemini stream error: Invalid JSON array start.")
+                                            break # Break inner loop, need more data from aiter_text()
+                                    
+                                    # Array has started, try to find a complete JSON object: { ... }
+                                    if object_start_index == -1: # Looking for the start of an object '{'
+                                        temp_buffer = buffer.lstrip() # Skip leading whitespace
+                                        if temp_buffer.startswith(','): # Skip leading comma if present
+                                            temp_buffer = temp_buffer[1:].lstrip()
+                                        
+                                        start_brace_idx = temp_buffer.find('{')
+                                        if start_brace_idx != -1:
+                                            object_start_index = len(buffer) - len(temp_buffer) + start_brace_idx
+                                            brace_level = 0 # Reset brace_level for the new object
+                                            logger.debug(f"Gemini stream: Potential object start found at index {object_start_index} in buffer.")
+                                        else:
+                                            # No '{' found. Check for end of array or if buffer is just whitespace/comma.
+                                            if buffer.strip() == ']':
+                                                logger.debug("Gemini stream: End of JSON array ']' detected.")
+                                                buffer = "" # Consumed
+                                            elif not buffer.strip() or buffer.strip() == ',':
+                                                logger.debug(f"Gemini stream: Buffer contains only whitespace/comma ('{buffer[:50]}...'), waiting for more data.")
+                                            # If buffer has other content but no '{', it might be an error or incomplete data.
+                                            # For now, we break to get more data. If it's an error, it will persist.
+                                            break # Break inner loop, need more data
+                                    
+                                    if object_start_index != -1:
+                                        # Scan from object_start_index to find the matching '}'
+                                        # Brace level should be 0 when starting to scan a new object from its '{'
+                                        # The first char at object_start_index is '{', so brace_level becomes 1
+                                        
+                                        # Re-scan for braces from object_start_index
+                                        current_scan_idx = object_start_index
+                                        temp_brace_level = 0
+                                        found_end_brace = False
 
-                            except json.JSONDecodeError as e:
-                                logger.error(f"Gemini _execute_streaming_with_rotation: Failed to parse JSON from Gemini stream buffer. Error: {e}. Buffer (start): '{json_buffer[:500]}...'")
-                                raise HTTPException(status_code=500, detail=f"Failed to parse Gemini API response stream: {e}")
+                                        while current_scan_idx < len(buffer):
+                                            char = buffer[current_scan_idx]
+                                            if char == '{':
+                                                temp_brace_level += 1
+                                            elif char == '}':
+                                                temp_brace_level -= 1
+                                                if temp_brace_level == 0 and buffer[object_start_index] == '{': # Ensure we started with an opening brace
+                                                    # Found a complete object
+                                                    obj_str = buffer[object_start_index : current_scan_idx + 1]
+                                                    logger.debug(f"Gemini stream: Complete object candidate: '{obj_str[:100]}...'")
+                                                    try:
+                                                        parsed_obj = json.loads(obj_str)
+                                                        yield parsed_obj
+                                                        yielded_data_chunk_count += 1
+                                                        logger.debug(f"Gemini stream: Yielded object #{yielded_data_chunk_count}")
+                                                        
+                                                        buffer = buffer[current_scan_idx + 1:] # Consume the parsed object
+                                                        object_start_index = -1 # Reset for next object
+                                                        found_end_brace = True
+                                                        break # Restart inner while to process rest of buffer
+                                                    except json.JSONDecodeError as e:
+                                                        logger.error(f"Gemini stream: JSONDecodeError for object string '{obj_str[:200]}...': {e}. Discarding segment.")
+                                                        buffer = buffer[current_scan_idx + 1:] # Discard problematic segment
+                                                        object_start_index = -1
+                                                        found_end_brace = True # Considered handled by discarding
+                                                        break 
+                                            current_scan_idx += 1
+                                        
+                                        if not found_end_brace:
+                                            # Full object not yet in buffer
+                                            logger.debug(f"Gemini stream: Incomplete object in buffer (brace_level: {temp_brace_level}), waiting for more data. Buffer: '{buffer[object_start_index:object_start_index+100]}...'")
+                                            break # Break inner loop, need more data from aiter_text()
+                                    else: # object_start_index is -1, but array_started. We broke from finding '{' or ']'
+                                        break # Break inner loop, need more data from aiter_text()
                             
-                            logger.info(f"Gemini API stream processing finished for {self.service_name} with key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}. Text chunks read: {line_count}, data chunks processed: {data_chunk_count}.")
+                            # After aiter_text() finishes, process any remaining buffer content
+                            if array_started and buffer.strip() and buffer.strip() != ']':
+                                logger.warning(f"Gemini stream: Incomplete data or trailing content left in buffer at end of stream: '{buffer[:200]}...'")
+                            elif not array_started and buffer.strip():
+                                logger.warning(f"Gemini stream: Data left in buffer but JSON array start '[' was never found: '{buffer[:200]}...'")
+
+
+                            logger.info(f"Gemini API stream processing finished for {self.service_name} with key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}. Data chunks yielded: {yielded_data_chunk_count}.")
                             
                             force_rotation_enabled_stream = False
                             try:
