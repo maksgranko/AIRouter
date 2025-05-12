@@ -1,7 +1,7 @@
 import json
 import os
 from typing import Dict, List, ValuesView
-from base_module import BaseModule
+from modules.base_module import BaseModule
 import logging
 
 logger = logging.getLogger(__name__)

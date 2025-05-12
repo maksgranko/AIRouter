@@ -1,0 +1,57 @@
+/* Стили, специфичные для admin_models.html, если они будут. */
+/* Общие стили, такие как body, container, h1, notification уже есть в admin_dashboard.css */
+/* Если admin_dashboard.css будет общим, то этот файл может быть почти пустым */
+/* или содержать только уникальные для этой страницы стили. */
+
+.model-list { 
+    list-style-type: none; 
+    padding: 0; 
+}
+.model-list li { 
+    background-color: #e9ecef; /* Можно заменить на Bootstrap классы, например, list-group-item */
+    margin-bottom: 8px; 
+    padding: 10px; 
+    border-radius: 4px; 
+}
+.model-id { 
+    font-weight: bold; 
+    color: #0056b3; 
+}
+.model-owner { 
+    font-style: italic; 
+    color: #555; 
+    font-size: 0.9em; 
+}
+.actions { 
+    margin-top: 20px; 
+    margin-bottom: 20px; 
+}
+/* Стили для .actions button и .actions a можно будет заменить на Bootstrap классы btn */
+.error-message { 
+    color: #dc3545; /* Bootstrap .text-danger */
+    font-weight: bold; 
+}
+.no-models { 
+    color: #6c757d; /* Bootstrap .text-muted */
+}
+
+/* Стили для уведомлений, если они не будут наследоваться из общего CSS */
+#model_notification_area .notification {
+    padding: 10px;
+    margin-bottom: 10px;
+    border-radius: 4px;
+    color: white;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    opacity: 1;
+    transition: opacity 0.3s ease-out;
+}
+#model_notification_area .notification.success {
+    background-color: #28a745;
+}
+#model_notification_area .notification.error {
+    background-color: #dc3545;
+}
+
+.clickable-model-id {
+    cursor: pointer;
+}
