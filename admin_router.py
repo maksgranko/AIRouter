@@ -107,8 +107,13 @@ async def get_dashboard_data(request: Request) -> Dict[str, Any]:
         "airouter_api_keys": airouter_key_manager.get_all_keys(),
         "require_airouter_api_key": require_airouter_api_key,
         "airouter_keys_file": airouter_key_manager.keys_file_path,
+        "openai_instances_file": "configs/openai_instances.json", # Путь к файлу инстансов
+        "openai_instances": _load_openai_instances(), # Список инстансов
         "app_version": request.app.state.app_version
     }
+
+# Импортируем функции для работы с инстансами из settings_api
+from api.admin.settings_api import _load_openai_instances, OPENAI_INSTANCES_CONFIG_PATH
 
 @router.get("/ui/api/dashboard-data", name="admin_ui_api_dashboard_data")
 async def admin_ui_api_dashboard_data_view(request: Request, username: str = Depends(get_current_username)):

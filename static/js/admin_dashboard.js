@@ -65,6 +65,7 @@ async function loadDashboardData() {
         document.getElementById('config_openai_path_display').innerText = data.openai_keys_file;
         document.getElementById('config_gemini_path_display').innerText = data.gemini_keys_file;
         document.getElementById('config_proxies_path_display').innerText = data.proxies_file;
+        document.getElementById('openai_instances_file_path_display').innerText = data.openai_instances_file; // Добавлено для нового файла
         
         // Управление API Ключами
         const apiKeysSection = document.getElementById('api_keys_management_section');
@@ -204,6 +205,51 @@ async function loadDashboardData() {
         } else {
             airouterKeysContainer.style.display = 'none';
         }
+        // Управление Инстансами OpenAI Compatible
+        const instancesSection = document.getElementById('openai_instances_management_section');
+        instancesSection.innerHTML = ''; // Очищаем предыдущее содержимое
+        if (data.openai_instances && data.openai_instances.length > 0) {
+            data.openai_instances.forEach(instance => {
+                const instanceDiv = document.createElement('div');
+                instanceDiv.className = 'card mb-3'; // Обертка для каждого инстанса
+                let keysHtml = '<ul class="list-group list-group-flush">';
+                if (instance.api_keys && instance.api_keys.length > 0) {
+                    instance.api_keys.forEach(key => {
+                        keysHtml += `
+                            <li class="list-group-item d-flex justify-content-between align-items-center">
+                                <span style="word-break: break-all; margin-right: 10px;">${key}</span>
+                                <button type="button" class="btn btn-danger btn-sm openai-instance-key-remove-btn" data-instance-name="${instance.name}" data-key="${key}">Удалить ключ</button>
+                            </li>`;
+                    });
+                } else {
+                    keysHtml += '<li class="list-group-item">Нет API ключей для этого инстанса.</li>';
+                }
+                keysHtml += '</ul>';
+
+                instanceDiv.innerHTML = `
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0">Инстанс: ${instance.name}</h5>
+                        <button type="button" class="btn btn-danger btn-sm openai-instance-remove-btn" data-instance-name="${instance.name}">Удалить инстанс</button>
+                    </div>
+                    <div class="card-body">
+                        <p class="card-text"><strong>Base URL:</strong> ${instance.base_url}</p>
+                        <h6>API Ключи:</h6>
+                        ${keysHtml}
+                        <form class="openai-instance-key-add-form mt-2" data-instance-name="${instance.name}">
+                            <div class="input-group input-group-sm">
+                                <input type="text" name="api_key" class="form-control" placeholder="Новый API ключ" required>
+                                <button type="submit" class="btn btn-primary btn-sm">Добавить ключ</button>
+                            </div>
+                        </form>
+                    </div>
+                `;
+                instancesSection.appendChild(instanceDiv);
+            });
+        } else {
+            instancesSection.innerHTML = '<p>Нет настроенных инстансов OpenAI Compatible.</p>';
+        }
+
+
         attachFormHandlers(); 
     } catch (error) {
         // Ошибка уже обработана в makeApiRequest
@@ -354,6 +400,74 @@ function attachFormHandlers() {
             } catch (e) {}
          }
     });
+
+    // Управление инстансами OpenAI Compatible
+    document.getElementById('form_add_openai_instance')?.addEventListener('submit', async function(event) {
+        event.preventDefault();
+        const form = event.target;
+        const name = form.elements['name'].value;
+        const baseUrl = form.elements['base_url'].value;
+        const apiKeysRaw = form.elements['api_keys'].value;
+        const apiKeys = apiKeysRaw.split(',').map(k => k.trim()).filter(k => k);
+
+        if (!name || !baseUrl || apiKeys.length === 0) {
+            showNotification('Все поля (Название, Base URL, API Ключи) должны быть заполнены.', 'error');
+            return;
+        }
+        try {
+            const result = await makeApiRequest(URLS.addOpenAIInstance, 'POST', { name, base_url: baseUrl, api_keys: apiKeys });
+            showNotification(result.message || 'Инстанс OpenAI Compatible добавлен.');
+            form.reset();
+            loadDashboardData();
+        } catch (e) { /* ошибка уже показана */ }
+    });
+
+    document.getElementById('openai_instances_management_section').addEventListener('click', async function(event) {
+        const target = event.target;
+        const instanceName = target.dataset.instanceName;
+
+        // Удаление инстанса
+        if (target.classList.contains('openai-instance-remove-btn')) {
+            if (!confirm(`Вы уверены, что хотите удалить инстанс "${instanceName}"?`)) return;
+            try {
+                const url = URLS.deleteOpenAIInstance.replace('INSTANCE_NAME_PLACEHOLDER', instanceName);
+                const result = await makeApiRequest(url, 'DELETE');
+                showNotification(result.message || `Инстанс "${instanceName}" удален.`);
+                loadDashboardData();
+            } catch (e) { /* ошибка уже показана */ }
+        }
+        // Удаление ключа инстанса
+        if (target.classList.contains('openai-instance-key-remove-btn')) {
+            const apiKey = target.dataset.key;
+            if (!confirm(`Вы уверены, что хотите удалить ключ ...${apiKey.slice(-4)} для инстанса "${instanceName}"?`)) return;
+            try {
+                const url = URLS.deleteOpenAIInstanceKey.replace('INSTANCE_NAME_PLACEHOLDER', instanceName);
+                const result = await makeApiRequest(url, 'DELETE', { api_key: apiKey });
+                showNotification(result.message || 'Ключ API удален.');
+                loadDashboardData();
+            } catch (e) { /* ошибка уже показана */ }
+        }
+    });
+    
+    document.getElementById('openai_instances_management_section').addEventListener('submit', async function(event) {
+        event.preventDefault();
+        const form = event.target;
+        // Добавление ключа к инстансу
+        if (form.classList.contains('openai-instance-key-add-form')) {
+            const instanceName = form.dataset.instanceName;
+            const apiKeyInput = form.querySelector('input[name="api_key"]');
+            const apiKey = apiKeyInput.value;
+            if (!apiKey) { showNotification('Ключ API не может быть пустым.', 'error'); return; }
+            try {
+                const url = URLS.addOpenAIInstanceKey.replace('INSTANCE_NAME_PLACEHOLDER', instanceName);
+                const result = await makeApiRequest(url, 'POST', { api_key: apiKey });
+                showNotification(result.message || 'Ключ API добавлен к инстансу.');
+                apiKeyInput.value = '';
+                loadDashboardData();
+            } catch (e) { /* ошибка уже показана */ }
+        }
+    });
+
     handlersAttached = true;
 }
 

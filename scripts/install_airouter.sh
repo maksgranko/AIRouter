@@ -212,7 +212,7 @@ setup_systemd_service() {
     # Команда для запуска приложения.
     # Используем абсолютный путь к python из venv.
     # Добавляем --host 0.0.0.0, чтобы приложение было доступно извне.
-    EXEC_START="$INSTALL_DIR/venv/bin/python -m uvicorn main:app --host 0.0.0.0 --reload"
+    EXEC_START="$INSTALL_DIR/venv/bin/python -m uvicorn main:app --host 0.0.0.0"
 
     cat > "$SERVICE_FILE_PATH" << EOF
 [Unit]

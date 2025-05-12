@@ -157,6 +157,36 @@
             <div class="card-footer instructions alert alert-secondary">Отключение модуля сделает его недоступным для API запросов.</div>
         </div>
 
+        <div class="card mb-4">
+            <div class="card-header"><h2>Управление Инстансами OpenAI Compatible</h2></div>
+            <div class="card-body" id="openai_instances_management_section">
+                <p class="placeholder">Загрузка инстансов OpenAI Compatible...</p>
+                <!-- Сюда будет динамически добавляться контент через JS -->
+            </div>
+            <div class="card-footer">
+                <form id="form_add_openai_instance">
+                    <h5>Добавить новый инстанс OpenAI Compatible</h5>
+                    <div class="mb-3">
+                        <label for="new_instance_name" class="form-label">Название инстанса (уникальное, например, "my_custom_gpt")</label>
+                        <input type="text" class="form-control" id="new_instance_name" name="name" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="new_instance_base_url" class="form-label">Base URL (например, https://api.example.com/v1)</label>
+                        <input type="url" class="form-control" id="new_instance_base_url" name="base_url" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="new_instance_api_keys" class="form-label">API Ключи (один или несколько, через запятую)</label>
+                        <textarea class="form-control" id="new_instance_api_keys" name="api_keys" rows="2" required></textarea>
+                    </div>
+                    <button type="submit" class="btn btn-success">Добавить инстанс</button>
+                </form>
+            </div>
+            <div class="card-footer instructions alert alert-secondary">
+                Инстансы сохраняются в <code id="openai_instances_file_path_display">configs/openai_instances.json</code>.
+                Модели из этих инстансов будут доступны по префиксу <code>openai_НАЗВАНИЕ_ИНСТАНСА/ИМЯ_МОДЕЛИ</code>.
+            </div>
+        </div>
+
         <div id="airouter_api_keys_section_container" class="card mb-4" style="display:none;">
             <div class="card-header"><h3 id="airouter_keys_title">API-ключи AIRouter (из файла: <span id="airouter_keys_file_display" class="fw-normal">...</span>)</h3></div>
             <div class="card-body">
@@ -192,7 +222,14 @@
             addProxy: "{{ url_for('ui_api_add_proxy') }}",
             deleteProxy: "{{ url_for('ui_api_delete_proxy') }}",
             reloadProxies: "{{ url_for('ui_api_reload_proxies') }}",
-            shuffleProxies: "{{ url_for('ui_api_shuffle_proxies') }}"
+            shuffleProxies: "{{ url_for('ui_api_shuffle_proxies') }}",
+            
+            // URLs для OpenAI Compatible Instances
+            getOpenAIInstances: "{{ url_for('ui_api_get_openai_instances') }}",
+            addOpenAIInstance: "{{ url_for('ui_api_add_openai_instance') }}",
+            deleteOpenAIInstance: "{{ url_for('ui_api_delete_openai_instance', instance_name='INSTANCE_NAME_PLACEHOLDER') }}",
+            addOpenAIInstanceKey: "{{ url_for('ui_api_add_openai_instance_key', instance_name='INSTANCE_NAME_PLACEHOLDER') }}",
+            deleteOpenAIInstanceKey: "{{ url_for('ui_api_delete_openai_instance_key', instance_name='INSTANCE_NAME_PLACEHOLDER') }}"
         };
     </script>
     <script src="{{ url_for('static', path='js/admin_dashboard.js') }}" defer></script>
