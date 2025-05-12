@@ -1,14 +1,14 @@
 [
   {
     "type": "socks5",
-    "url": "socks5://otyeNUlaFp:FvGg7ccHlJ@146.19.84.231:37914"
-  },
-  {
-    "type": "socks5",
     "url": "socks5://uk7u0TR8mO:bH2DnjHGp0@146.19.84.231:37914"
   },
   {
     "type": "socks5",
     "url": "socks5://NfgBUyQ8sC:ikNish9hGR@146.19.84.231:37914"
+  },
+  {
+    "type": "socks5",
+    "url": "socks5://otyeNUlaFp:FvGg7ccHlJ@146.19.84.231:37914"
   }
 ]
