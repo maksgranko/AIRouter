@@ -1,0 +1,38 @@
+/* Стили, специфичные для admin_help.html, если они будут. */
+/* Общие стили, такие как body, container, h1, notification уже есть в admin_dashboard.css */
+/* Если admin_dashboard.css будет общим, то этот файл может быть почти пустым */
+/* или содержать только уникальные для этой страницы стили. */
+
+/* Стили для таблиц и блоков кода можно улучшить или заменить классами Bootstrap */
+table { 
+    width: 100%; 
+    border-collapse: collapse; 
+    margin-top: 15px; 
+    margin-bottom: 15px; 
+}
+th, td { 
+    border: 1px solid #ddd; 
+    padding: 8px; 
+    text-align: left; 
+}
+th { 
+    background-color: #f0f0f0; 
+}
+pre { 
+    background-color: #e9ecef; 
+    padding: 10px; 
+    border-radius: 4px; 
+    overflow-x: auto; 
+    white-space: pre-wrap; /* Добавлено для лучшего переноса */
+    word-wrap: break-word; /* Добавлено для лучшего переноса */
+}
+code { /* Уже есть в admin_dashboard.css, но можно уточнить */
+    background-color: #e9ecef; 
+    padding: 0.2em 0.4em; /* Bootstrap использует .2em .4em */
+    margin: 0;
+    font-size: 85%; /* Bootstrap использует 87.5% */
+    border-radius: 0.2rem; /* Bootstrap использует .25rem */
+    font-family: monospace; 
+    white-space: pre-wrap;
+}
+/* .nav-link уже есть в admin_dashboard.css, если он общий */

@@ -2,12 +2,11 @@
   "proxy_settings": {
     "use_proxies": true,
     "rotation_mode": "cycle",
-    "select_random_proxy_each_request": false,
-    "force_proxy_rotation_after_request": false
+    "select_random_proxy_each_request": false
   },
   "module_statuses": {
     "openai": false,
     "gemini": true
   },
-  "require_airouter_api_key": false
+  "require_airouter_api_key": true
 }

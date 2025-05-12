@@ -1,7 +1,7 @@
 import httpx # Используем httpx для запросов
 from httpx_socks import AsyncProxyTransport # Для явного указания SOCKS транспорта
 from typing import Dict, Any, Optional, AsyncGenerator
-from base_module import BaseModule
+from .base_module import BaseModule # Исправленный импорт
 from api_key_manager import ApiKeyManager
 from proxy_manager import ProxyManager, ProxyConfig # Импортируем ProxyManager
 import logging

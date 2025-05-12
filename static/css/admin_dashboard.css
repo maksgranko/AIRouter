@@ -1,0 +1,67 @@
+body { 
+    font-family: sans-serif; 
+    margin: 20px; 
+    background-color: #f4f4f4; 
+    color: #333; 
+}
+.container { 
+    background-color: #fff; 
+    padding: 20px; 
+    border-radius: 8px; 
+    box-shadow: 0 0 10px rgba(0,0,0,0.1); 
+}
+h1 { 
+    color: #333; 
+}
+h2 { 
+    color: #555; 
+    border-bottom: 1px solid #eee; 
+    padding-bottom: 5px;
+}
+.setting { 
+    margin-bottom: 15px; 
+    padding: 10px; 
+    border: 1px solid #ddd; 
+    border-radius: 4px; 
+}
+.setting-name { 
+    font-weight: bold; 
+    color: #0056b3; 
+}
+.setting-value { 
+    font-style: italic; 
+    color: #28a745; 
+}
+.instructions { 
+    margin-top: 20px; 
+    padding: 15px; 
+    background-color: #e9ecef; 
+    border-left: 3px solid #007bff; 
+    font-size: 0.9em;
+}
+.placeholder { 
+    color: #999; 
+    font-style: italic; 
+}
+#notification_area { 
+    position: fixed; 
+    top: 20px; 
+    right: 20px; 
+    z-index: 1000; 
+    width: 300px; 
+}
+.notification { 
+    padding: 10px; 
+    margin-bottom: 10px; 
+    border-radius: 4px; 
+    color: white; 
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2); 
+    opacity: 1;
+    transition: opacity 0.3s ease-out;
+}
+.notification.success { 
+    background-color: #28a745; 
+}
+.notification.error { 
+    background-color: #dc3545; 
+}

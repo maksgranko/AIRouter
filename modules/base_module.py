@@ -27,8 +27,10 @@ class BaseModule(ABC):
     async def generate_image(self, request: Dict[str, Any]) -> Dict[str, Any]:
         raise NotImplementedError("Image generation is not supported.")
 
-    async def audio_transcription(self, request: Dict[str, Any], file_data: bytes) -> Dict[str, Any]:
+    async def audio_transcription(self, request: Dict[str, Any], file_data: bytes, filename: str) -> Dict[str, Any]:
+        # Добавлен filename, так как он может быть нужен модулям
         raise NotImplementedError("Audio transcription is not supported.")
 
-    async def audio_translation(self, request: Dict[str, Any], file_data: bytes) -> Dict[str, Any]:
+    async def audio_translation(self, request: Dict[str, Any], file_data: bytes, filename: str) -> Dict[str, Any]:
+        # Добавлен filename
         raise NotImplementedError("Audio translation is not supported.")

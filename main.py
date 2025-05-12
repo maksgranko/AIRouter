@@ -5,6 +5,7 @@ import inspect # Для проверки типа функции
 from typing import AsyncGenerator, Dict, Any, Optional # Для sse_event_formatter
 from dotenv import load_dotenv # Импортируем load_dotenv
 from fastapi import FastAPI, Request, UploadFile, HTTPException, Depends
+from fastapi.staticfiles import StaticFiles # <--- Добавлено для статических файлов
 from fastapi.responses import StreamingResponse, JSONResponse, Response, FileResponse # Добавлен FileResponse
 from fastapi.security.http import HTTPBearer, HTTPAuthorizationCredentials
 from registry import ModuleRegistry
@@ -18,7 +19,7 @@ import logging # Добавляем импорт logging
 
 # Настраиваем базовое логирование
 open_browser_on_save = False
-logging_type = logging.DEBUG
+logging_type = logging.INFO
 
 logging.basicConfig(level=logging_type, format='%(levelname)s:%(name)s:%(asctime)s:%(message)s') # Изменено на DEBUG и добавлен asctime
 logger = logging.getLogger(__name__) # Создаем логгер для main.py
@@ -40,7 +41,11 @@ gemini_module_logger.setLevel(logging_type)
 load_dotenv() 
 
 # app и registry создаются один раз здесь
+APP_VERSION = "1.1.0a" # Версия приложения
 app = FastAPI()
+
+# Монтирование статических файлов
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # Схема аутентификации Bearer
 bearer_scheme = HTTPBearer()
@@ -120,15 +125,17 @@ app.state.proxy_manager = proxy_manager
 app.state.module_registry = registry
 app.state.airouter_key_manager = airouter_key_manager # <--- Добавлено
 app.state.settings_file_path = SETTINGS_FILE # <--- Добавлено для доступа к настройкам
+app.state.app_version = APP_VERSION # <--- Добавлено для версии
 
 
 # Middleware для проверки API ключа AIRouter
 @app.middleware("http")
 async def check_airouter_api_key(request: Request, call_next):
-    # Пропускаем проверку для админ-панели, статических файлов и favicon.ico
+    # Пропускаем проверку для админ-панели, ее API, статических файлов и favicon.ico
     if request.url.path == "/favicon.ico" or \
+       request.url.path.startswith("/static") or \
        request.url.path.startswith("/admin") or \
-       request.url.path.startswith("/static"):
+       request.url.path.startswith("/api/admin/"): # Уточненное условие
         response = await call_next(request)
         return response
 
@@ -221,225 +228,26 @@ except Exception as e:
 # Подключаем роутер админ-панели
 app.include_router(admin_router.router)
 
+# Подключаем новые UI API роутеры из папки api/admin
+from api.admin import dashboard_api, settings_api, keys_api, proxies_api, models_api
+app.include_router(dashboard_api.router)
+app.include_router(settings_api.router)
+app.include_router(keys_api.router)
+app.include_router(proxies_api.router)
+app.include_router(models_api.router) 
+
+# Подключаем OpenAI-совместимый роутер
+from api.airouter import openai_compatible
+app.include_router(openai_compatible.router)
+
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():
-    favicon_path = os.path.join("templates", "favicon.ico")
+    favicon_path = os.path.join("static", "favicon.ico") # Изменен путь
     if os.path.exists(favicon_path):
         return FileResponse(favicon_path, media_type="image/vnd.microsoft.icon")
     else:
         # Если файла нет по какой-то причине, возвращаем 204, чтобы не было ошибки 404 в логах браузера
         return Response(status_code=204)
 
-def get_module(request_data: dict):
-    """
-    Получает модуль для обработки запроса.
-    Логика выбора модуля по model_name или service_name.
-    """
-    # Сначала пытаемся получить по полному имени модели (например, "openai/gpt-4")
-    # Если не найдено, пытаемся по имени сервиса (например, "openai")
-    # Это позволяет регистрировать модули по имени сервиса, а в запросе указывать конкретную модель.
-    model_identifier = request_data.get("model", "openai") # "openai" - сервис по умолчанию
-    
-    # Попытка 1: получить модуль по полному идентификатору модели из запроса
-    try:
-        module = registry.get(model_identifier)
-        return module
-    except KeyError:
-        pass # Продолжаем, если не найдено
-
-    # Попытка 2: если в идентификаторе есть '/', извлечь имя сервиса (часть до '/') и попробовать по нему
-    if '/' in model_identifier:
-        service_name_from_slash = model_identifier.split('/')[0]
-        try:
-            module = registry.get(service_name_from_slash)
-            # TODO: В будущем модуль может сам решать, какую под-модель использовать,
-            # если service_name_from_slash != model_identifier
-            return module
-        except KeyError:
-            pass # Продолжаем, если не найдено
-
-    # Попытка 3: проверить известные префиксы сервисов
-    # Это полезно для моделей типа "gemini-pro", "gemini-1.5-flash", и т.д.
-    # или если модуль зарегистрирован как "openai", а в запросе "gpt-4" (хотя это менее вероятно)
-    known_prefixes = ["gemini", "openai"] # Можно расширить список
-    for prefix in known_prefixes:
-        if model_identifier.startswith(prefix):
-            try:
-                module = registry.get(prefix) # Пытаемся получить модуль по имени сервиса (префиксу)
-                return module
-            except KeyError:
-                # Если модуль для этого префикса не зарегистрирован, это не ошибка,
-                # просто этот префикс не подходит.
-                pass 
-                
-    # Если ни одна из попыток не увенчалась успехом
-    logger.error(f"Failed to find module for model_identifier: '{model_identifier}'. Review request body or ensure module is registered and active.")
-    raise HTTPException(status_code=400, detail=f"Module for model/service '{model_identifier}' not found or not registered.")
-
-
-async def sse_event_formatter(generator: AsyncGenerator[Dict[str, Any], None]) -> AsyncGenerator[str, None]:
-    """
-    Форматирует словари из генератора в Server-Sent Events (SSE) строки.
-    Также обрабатывает исключения из генератора и отправляет ошибку в SSE формате.
-    """
-    try:
-        async for chunk_data in generator:
-            yield f"data: {json.dumps(chunk_data)}\n\n"
-        yield f"data: [DONE]\n\n"
-    except HTTPException as e:
-        logger.error(f"HTTPException during SSE stream generation: {e.detail}", exc_info=False) # Не логгируем полный traceback для HTTPException
-        error_payload = {
-            "error": {
-                "message": e.detail,
-                "type": "api_error", # Можно уточнить тип ошибки
-                "param": None, # Можно добавить, если известно
-                "code": str(e.status_code) # Код ошибки как строка
-            }
-        }
-        yield f"data: {json.dumps(error_payload)}\n\n"
-        yield f"data: [DONE]\n\n" # Важно завершить поток корректно
-    except Exception as e:
-        logger.error(f"Unexpected exception during SSE stream generation: {e}", exc_info=True)
-        error_payload = {
-            "error": {
-                "message": "An unexpected error occurred during streaming.",
-                "type": "internal_server_error",
-                "param": None,
-                "code": "500"
-            }
-        }
-        yield f"data: {json.dumps(error_payload)}\n\n"
-        yield f"data: [DONE]\n\n"
-
-
-@app.post("/v1/chat/completions")
-async def chat_completions(request: Request):
-    body = await request.json()
-    module = get_module(body)
-
-    # Проверяем, является ли метод chat_completion асинхронным генератором
-    if inspect.isasyncgenfunction(module.chat_completion):
-        # Если да, используем StreamingResponse
-        # module.chat_completion(body) возвращает сам генератор
-        actual_generator = module.chat_completion(body)
-        return StreamingResponse(sse_event_formatter(actual_generator), media_type="text/event-stream")
-    else:
-        # Если это обычная async функция, вызываем ее через await
-        return await module.chat_completion(body)
-
-@app.post("/v1/completions")
-async def completions(request: Request):
-    body = await request.json()
-    module = get_module(body)
-    return await module.completion(body)
-
-@app.post("/v1/embeddings")
-async def embeddings(request: Request):
-    body = await request.json()
-    module = get_module(body)
-    return await module.embeddings(body)
-
-@app.get("/v1/models")
-async def list_models():
-    all_models = []
-    # Используем all_active_modules, чтобы получать модели только от включенных сервисов
-    for mod in registry.all_active_modules(): 
-        try:
-            models = await mod.list_models()
-            all_models.extend(models.get("data", []))
-        except Exception: # Общая обработка ошибок, чтобы один модуль не сломал весь эндпоинт
-            continue
-    return {"object": "list", "data": all_models}
-
-@app.get("/v1/models/{model_id}")
-async def retrieve_model(model_id: str):
-    # При получении конкретной модели, мы должны проверить все зарегистрированные модули,
-    # но registry.get() уже учитывает статус активности.
-    # Однако, если модель запрашивается по ID, который может принадлежать неактивному модулю,
-    # то get_module() не найдет его.
-    # Логика здесь должна быть такой: найти модуль, которому принадлежит model_id,
-    # и если этот модуль активен, то вызвать retrieve_model.
-    # Это сложнее, т.к. model_id не содержит имени сервиса.
-    # Пока оставим как есть, но это потенциальное место для улучшения:
-    # возможно, retrieve_model должен перебирать all_registered_modules и проверять активность перед вызовом.
-    # Или же, если модель запрашивается, она должна быть от активного модуля.
-    # Текущая реализация get_module() в других эндпоинтах уже проверяет активность.
-    # Для /v1/models/{model_id} нужно решить, как определять модуль.
-    # Простой вариант: если модель запрашивают, она должна быть доступна через активный модуль.
-    # Поэтому, если мы не можем получить модуль через registry.get(model_id) или registry.get(service_part_of_model_id),
-    # то модель не найдена или ее сервис неактивен.
-
-    # Попробуем извлечь имя сервиса из model_id, если оно там есть (например, "openai/gpt-4")
-    parts = model_id.split('/')
-    service_to_try = parts[0] if len(parts) > 1 else None
-
-    # Сначала пытаемся по полному ID (если модуль зарегистрирован так)
-    try:
-        module = registry.get(model_id)
-        return await module.retrieve_model(model_id)
-    except KeyError:
-        # Если не получилось, и есть сервисная часть, пробуем по ней
-        if service_to_try:
-            try:
-                module = registry.get(service_to_try)
-                # Убедимся, что запрашиваемая модель действительно принадлежит этому модулю
-                # (это упрощенная проверка, в реальности может быть сложнее)
-                # Например, модуль OpenAI может обслуживать много моделей.
-                # Мы просто передаем model_id дальше, модуль сам разберется.
-                return await module.retrieve_model(model_id)
-            except KeyError:
-                pass # Модуль сервиса не найден или неактивен
-        
-        # Если ничего не помогло, перебираем все активные модули (менее эффективно)
-        # Это может быть нужно, если model_id не содержит префикса сервиса
-        for mod in registry.all_active_modules():
-            try:
-                # Предполагаем, что retrieve_model вернет ошибку, если модель не его
-                # или выбросит NotImplementedError, если не поддерживает метод
-                retrieved = await mod.retrieve_model(model_id)
-                # Проверим, что это не стандартный ответ "не реализовано" от BaseModule
-                if isinstance(retrieved, dict) and retrieved.get("object") == "model": # Успешное получение
-                    return retrieved
-            except NotImplementedError:
-                continue
-            except HTTPException as e: # Если модуль вернул ошибку, что модель не найдена у него
-                if e.status_code == 404 or "not found" in str(e.detail).lower(): # Примерная проверка
-                    continue
-                raise # Другая ошибка HTTPException
-            except Exception: # Другие непредвиденные ошибки
-                continue
-                
-    return HTTPException(status_code=404, detail=f"Model '{model_id}' not found or its service is inactive.")
-
-
-@app.post("/v1/moderations")
-async def moderations(request: Request):
-    body = await request.json()
-    module = get_module(body)
-    return await module.moderations(body)
-
-@app.post("/v1/images/generations")
-async def generate_image(request: Request):
-    body = await request.json()
-    module = get_module(body)
-    return await module.generate_image(body)
-
-@app.post("/v1/audio/transcriptions")
-async def audio_transcription(request: Request, file: UploadFile):
-    body = await request.form() # Аудио запросы обычно используют form-data
-    model_name = body.get("model", "openai") # Получаем модель из формы или по умолчанию
-    module = registry.get(model_name)
-    file_bytes = await file.read()
-    # Передаем параметры из формы в модуль, исключая сам файл, если он там есть
-    request_params = {k: v for k, v in body.items() if k != 'file'}
-    return await module.audio_transcription(request_params, file_bytes)
-
-@app.post("/v1/audio/translations")
-async def audio_translation(request: Request, file: UploadFile):
-    body = await request.form() # Аудио запросы обычно используют form-data
-    model_name = body.get("model", "openai") # Получаем модель из формы или по умолчанию
-    module = registry.get(model_name)
-    file_bytes = await file.read()
-    # Передаем параметры из формы в модуль, исключая сам файл, если он там есть
-    request_params = {k: v for k, v in body.items() if k != 'file'}
-    return await module.audio_translation(request_params, file_bytes)
+# Вспомогательные функции get_module и sse_event_formatter, а также эндпоинты /v1/...
+# были перенесены в api/airouter/openai_compatible.py
