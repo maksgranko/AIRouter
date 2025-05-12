@@ -49,7 +49,11 @@
                     <li><code>/v1/embeddings</code> - для получения векторных представлений текста.</li>
                     <li><code>/v1/models</code> - для получения списка доступных моделей от активных модулей.</li>
                     <li><code>/v1/models/{'{model_id}'}</code> - для получения информации о конкретной модели.</li>
-                    <li>Другие эндпоинты, такие как <code>/v1/moderations</code>, <code>/v1/images/generations</code>, <code>/v1/audio/transcriptions</code>, <code>/v1/audio/translations</code>, также реализованы и будут работать, если соответствующий модуль их поддерживает.</li>
+                    <li><code>/v1/moderations</code> - для запросов к API модерации.</li>
+                    <li><code>/v1/images/generations</code> - для запросов генерации изображений.</li>
+                    <li><code>/v1/audio/transcriptions</code> - для транскрипции аудио (ожидает `multipart/form-data`).</li>
+                    <li><code>/v1/audio/translations</code> - для перевода аудио (ожидает `multipart/form-data`).</li>
+                    <li>(и другие, если модуль их поддерживает)</li>
                 </ul>
                 <h3>Отправка Запросов</h3>
                 <p>При отправке запроса, например, к <code>/v1/chat/completions</code>, важно указать параметр <code>model</code> в теле JSON-запроса. Этот параметр определяет, какой из подключенных модулей (и какая конкретная модель внутри этого модуля, если применимо) будет обрабатывать запрос.</p>

@@ -1,13 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.responses import JSONResponse
 
-# Относительные импорты из корневой папки проекта
-from admin_router import get_current_username, _fetch_and_cache_all_models, \
-                         _cached_models_data, _cached_models_error
-# _fetch_and_cache_all_models - внутренняя функция admin_router, нужно убедиться, что она доступна
-# или перенести ее логику сюда/в общее место. Пока предполагаем, что импорт сработает.
-# Если _fetch_and_cache_all_models не предназначена для прямого импорта, 
-# то нужно будет рефакторить admin_router.py, чтобы сделать ее или ее логику доступной.
+# Импортируем модуль admin_router целиком, чтобы получить доступ к его глобальным переменным
+import admin_router 
+# Также импортируем необходимые функции напрямую, если они используются как зависимости и т.д.
+from admin_router import get_current_username 
+
 
 router = APIRouter(
     prefix="/api/admin/ui/models",
@@ -21,15 +19,15 @@ async def ui_api_refresh_models(
     username: str = Depends(get_current_username)
 ):
     try:
-        # _fetch_and_cache_all_models - это асинхронная функция, обновляющая глобальный кэш
-        await _fetch_and_cache_all_models(request, force_refresh=True)
+        # Вызываем функцию _fetch_and_cache_all_models из модуля admin_router
+        await admin_router._fetch_and_cache_all_models(request, force_refresh=True)
         
-        # Возвращаем обновленные данные из кэша
+        # Получаем обновленные данные из глобальных переменных модуля admin_router
         response_content = {
             "status": "success",
             "message": "Model list cache refreshed.",
-            "models": _cached_models_data, # Данные из кэша
-            "error_message": _cached_models_error # Ошибка из кэша, если есть
+            "models": admin_router._cached_models_data, # Доступ через префикс модуля
+            "error_message": admin_router._cached_models_error # Доступ через префикс модуля
         }
         return JSONResponse(content=response_content)
     except Exception as e:

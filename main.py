@@ -19,7 +19,7 @@ import logging # Добавляем импорт logging
 
 # Настраиваем базовое логирование
 open_browser_on_save = False
-logging_type = logging.DEBUG
+logging_type = logging.INFO
 
 logging.basicConfig(level=logging_type, format='%(levelname)s:%(name)s:%(asctime)s:%(message)s') # Изменено на DEBUG и добавлен asctime
 logger = logging.getLogger(__name__) # Создаем логгер для main.py
@@ -41,7 +41,7 @@ gemini_module_logger.setLevel(logging_type)
 load_dotenv() 
 
 # app и registry создаются один раз здесь
-APP_VERSION = "1.0.6a" # Версия приложения
+APP_VERSION = "1.1.0a" # Версия приложения
 app = FastAPI()
 
 # Монтирование статических файлов

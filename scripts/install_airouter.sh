@@ -184,8 +184,8 @@ setup_venv_and_dependencies() {
 
 # Запрос пользователя для службы
 prompt_for_service_user() {
-    DEFAULT_USER="nobody" # Пользователь по умолчанию, если не указан другой
-    read -r -p "От имени какого пользователя Linux должен запускаться сервис $APP_NAME (например, www-data, nobody, или ваш обычный пользователь)? [${DEFAULT_USER}]: " SERVICE_USER
+    DEFAULT_USER="airouter" # Пользователь по умолчанию, если не указан другой
+    read -r -p "От имени какого пользователя Linux должен запускаться сервис $APP_NAME (например, www-data, nobody(не рекомендуется, могут быть проблемы с конфигами), или ваш обычный пользователь)? [${DEFAULT_USER}]: " SERVICE_USER
     SERVICE_USER=${SERVICE_USER:-$DEFAULT_USER} # Если ввод пустой, используем значение по умолчанию
 
     if ! id "$SERVICE_USER" &>/dev/null; then
