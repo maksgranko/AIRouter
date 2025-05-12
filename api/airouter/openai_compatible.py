@@ -160,87 +160,56 @@ async def generate_image(request: Request):
     return await module.generate_image(body)
 
 @router.post("/v1/audio/transcriptions")
-async def audio_transcription(request: Request, file: UploadFile = None): # File может быть None, если не передан
-    # FastAPI ожидает UploadFile как отдельный параметр, а не в request.form() напрямую для JSON API
-    # Если мы хотим JSON API, то файл должен быть частью multipart/form-data,
-    # или тело запроса должно быть JSON, а файл - отдельным полем.
-    # Для совместимости с OpenAI, они часто используют multipart/form-data для аудио.
-    # Пока оставим как есть, но это может потребовать адаптации клиента.
-    # Если файл передается как часть form-data, то request.json() вызовет ошибку.
-    # Нужно будет использовать request.form() и обрабатывать файл отдельно.
-    
-    # Предположим, что клиент будет отправлять JSON с метаданными, а файл отдельно,
-    # или что UploadFile будет корректно обработан FastAPI даже если тело JSON.
-    # Это сложный момент для прямого переноса.
-    # Для простоты, пока оставим как есть, но это может не работать как JSON API.
-    # OpenAI API для audio ожидает multipart/form-data.
-    
-    # Чтобы это работало как JSON API, клиент должен был бы передать файл, например, в base64 в JSON.
-    # Или мы должны оставить этот эндпоинт как form-data.
-    # Поскольку пользователь просит перенести "все эндпоинты, не связанные с рендерингом" в API,
-    # и эти эндпоинты уже были API, я сохраню их логику максимально близко.
-    
-    # Если мы хотим, чтобы это был JSON API, то file: UploadFile не будет работать с request.json()
-    # Если это form-data, то request.json() не будет работать.
-    # OpenAI API для audio/transcriptions использует multipart/form-data.
-    # Поэтому, мы должны ожидать Form() для параметров и UploadFile для файла.
-    
-    # Вернемся к логике из main.py, где использовался request.form()
-    # Это означает, что эти эндпоинты не являются чисто JSON API, а form-data API.
-    
-    form_data = await request.form()
-    model_name = form_data.get("model", "openai")
-    
-    # Получаем файл из form_data, если он там есть.
-    # FastAPI автоматически инжектирует UploadFile, если он объявлен в параметрах функции.
-    # Если мы используем request.form(), то файл нужно будет искать там.
-    # Но если file: UploadFile объявлен, FastAPI ожидает его как отдельный параметр.
-    # Это конфликт.
-    
-    # Решение: Объявим file: UploadFile и model: str = Form(...)
-    # Это стандартный способ для FastAPI обрабатывать файлы и данные форм.
-    # Уберем request.json() и request.form() и будем полагаться на параметры функции.
-    
-    # Этот эндпоинт будет переписан ниже с правильными параметрами.
-    raise NotImplementedError("Audio endpoints need specific form/file handling.")
-
-
-@router.post("/v1/audio/translations")
-async def audio_translation(request: Request, file: UploadFile = None):
-    # Аналогично transcriptions
-    raise NotImplementedError("Audio endpoints need specific form/file handling.")
-
-# Переписанные аудио эндпоинты
-@router.post("/v1/audio/transcriptions_form") # Изменим путь, чтобы не конфликтовать, пока не решим
-async def audio_transcription_form(
-    request: Request, # Для доступа к app.state
-    file: UploadFile, 
-    model: Optional[str] = Form(None) # model теперь Form параметр
-    # другие параметры OpenAI могут быть добавлены сюда как Form(...)
+async def audio_transcription(
+    request: Request,
+    file: UploadFile,
+    model: Optional[str] = Form(None),
+    language: Optional[str] = Form(None),
+    prompt: Optional[str] = Form(None),
+    response_format: Optional[str] = Form(None),
+    temperature: Optional[float] = Form(None)
+    # timestamp_granularities: Optional[List[str]] = Form(None) # Для поддержки этого нужно будет адаптировать BaseModule и OpenAIModule
 ):
-    # Получаем model из Form или используем значение по умолчанию
-    model_name_to_use = model if model else "openai" # или другой дефолт, если нужно
-    module = get_module(request, {"model": model_name_to_use}) # Передаем request
-    
+    model_name_to_use = model if model else "openai" # Или другой дефолт, если модуль может его определить
+    module = get_module(request, {"model": model_name_to_use})
+
     file_bytes = await file.read()
-    # request_params должны собираться из других Form(...) полей, если они есть
-    request_params = {"model": model_name_to_use} # Пример
-    # Если есть другие параметры, их нужно будет добавить в request_params
-    # Например: language: Optional[str] = Form(None) -> request_params["language"] = language
     
+    request_params = {"model": model_name_to_use} # model передается для внутренней логики модуля, если нужно
+    if language:
+        request_params["language"] = language
+    if prompt:
+        request_params["prompt"] = prompt
+    if response_format:
+        request_params["response_format"] = response_format
+    if temperature is not None:
+        request_params["temperature"] = temperature
+    # if timestamp_granularities:
+    #     request_params["timestamp_granularities[]"] = timestamp_granularities
+
+    # Передаем filename в модуль, он может быть нужен
     return await module.audio_transcription(request_params, file_bytes, file.filename)
 
-
-@router.post("/v1/audio/translations_form") # Изменим путь
-async def audio_translation_form(
-    request: Request, # Для доступа к app.state
+@router.post("/v1/audio/translations")
+async def audio_translation(
+    request: Request,
     file: UploadFile,
-    model: Optional[str] = Form(None)
+    model: Optional[str] = Form(None),
+    prompt: Optional[str] = Form(None),
+    response_format: Optional[str] = Form(None),
+    temperature: Optional[float] = Form(None)
 ):
     model_name_to_use = model if model else "openai"
-    module = get_module(request, {"model": model_name_to_use}) # Передаем request
-    
+    module = get_module(request, {"model": model_name_to_use})
+
     file_bytes = await file.read()
-    request_params = {"model": model_name_to_use}
     
+    request_params = {"model": model_name_to_use}
+    if prompt:
+        request_params["prompt"] = prompt
+    if response_format:
+        request_params["response_format"] = response_format
+    if temperature is not None:
+        request_params["temperature"] = temperature
+        
     return await module.audio_translation(request_params, file_bytes, file.filename)
