@@ -1,36 +1,51 @@
 from abc import ABC, abstractmethod
-from typing import Dict, Any
+from typing import Dict, Any, Optional, AsyncGenerator
 
 class BaseModule(ABC):
     @abstractmethod
     def get_name(self) -> str:
         pass
 
-    async def chat_completion(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        raise NotImplementedError("Chat completion is not supported.")
+    @abstractmethod
+    def _get_httpx_proxies(self, proxy_config: Optional[Any]) -> Optional[Dict[str, str]]:
+        pass
 
-    async def completion(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        raise NotImplementedError("Completion is not supported.")
+    @abstractmethod
+    async def _execute_non_streaming_with_rotation(self, *args, **kwargs) -> Dict[str, Any]:
+        pass
 
-    async def embeddings(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        raise NotImplementedError("Embeddings are not supported.")
+    @abstractmethod
+    async def _execute_streaming_with_rotation(self, *args, **kwargs) -> AsyncGenerator[Dict[str, Any], None]:
+        pass
 
+    @abstractmethod
+    async def chat_completion(self, request: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+        pass
+
+    @abstractmethod
     async def list_models(self) -> Dict[str, Any]:
-        return {"object": "list", "data": []}
+        pass
 
-    async def retrieve_model(self, model_id: str) -> Dict[str, Any]:
-        raise NotImplementedError("Model retrieval is not supported.")
+    @abstractmethod
+    async def completion(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        pass
 
+    @abstractmethod
+    async def embeddings(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        pass
+
+    @abstractmethod
     async def moderations(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        raise NotImplementedError("Moderation is not supported.")
+        pass
 
+    @abstractmethod
     async def generate_image(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        raise NotImplementedError("Image generation is not supported.")
+        pass
 
-    async def audio_transcription(self, request: Dict[str, Any], file_data: bytes, filename: str) -> Dict[str, Any]:
-        # Добавлен filename, так как он может быть нужен модулям
-        raise NotImplementedError("Audio transcription is not supported.")
+    @abstractmethod
+    async def audio_transcription(self, request: Dict[str, Any], file_data: bytes, filename: Optional[str] = None) -> Dict[str, Any]:
+        pass
 
-    async def audio_translation(self, request: Dict[str, Any], file_data: bytes, filename: str) -> Dict[str, Any]:
-        # Добавлен filename
-        raise NotImplementedError("Audio translation is not supported.")
+    @abstractmethod
+    async def audio_translation(self, request: Dict[str, Any], file_data: bytes, filename: Optional[str] = None) -> Dict[str, Any]:
+        pass

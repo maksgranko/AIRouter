@@ -1,36 +1,26 @@
-// Предполагается, что URLS.ui_api_refresh_models будет доступен глобально или передан
-// Для простоты, предполагаем, что объект URLS определен в HTML, как для admin_dashboard.
-
 function showModelNotification(message, type = 'success') {
     const notificationArea = document.getElementById('model_notification_area');
     if (!notificationArea) {
         console.warn("Notification area 'model_notification_area' not found.");
-        alert(message); // Fallback
+        alert(message);
         return;
     }
     const notification = document.createElement('div');
-    // Используем классы, совместимые с Bootstrap и/или admin_dashboard.css
-    notification.className = `alert alert-${type === 'success' ? 'success' : 'danger'} mt-2`; 
+    notification.className = `alert alert-${type === 'success' ? 'success' : 'danger'} mt-2`;
     notification.role = 'alert';
     notification.innerText = message;
-    
-    notificationArea.innerHTML = ''; // Очищаем предыдущие
-    notificationArea.appendChild(notification);
 
-    // Bootstrap сам не удаляет alert-ы, так что можно оставить или добавить свою логику
-    // setTimeout(() => {
-    //     notification.style.opacity = '0';
-    //     setTimeout(() => notification.remove(), 300);
-    // }, 5000);
+    notificationArea.innerHTML = '';
+    notificationArea.appendChild(notification);
 }
 
 function renderModelsList(models, errorMessage) {
-    const modelsContainer = document.getElementById('models_list_container'); // Предполагаем, что такой контейнер есть
+    const modelsContainer = document.getElementById('models_list_container');
     if (!modelsContainer) {
         console.error("Container 'models_list_container' not found for rendering models.");
         return;
     }
-    modelsContainer.innerHTML = ''; // Очищаем предыдущий список
+    modelsContainer.innerHTML = '';
 
     if (errorMessage) {
         const errorDiv = document.createElement('div');
@@ -46,7 +36,6 @@ function renderModelsList(models, errorMessage) {
         models.forEach(model => {
             const li = document.createElement('li');
             li.className = 'list-group-item';
-            // Делаем h5 кликабельным и добавляем data-attribute для ID
             li.innerHTML = `
                 <div class="d-flex w-100 justify-content-between">
                     <h5 class="mb-1 model-id clickable-model-id" data-model-id="${model.id}" title="Нажмите, чтобы скопировать ID">${model.id}</h5>
@@ -57,7 +46,7 @@ function renderModelsList(models, errorMessage) {
         });
         modelsContainer.appendChild(ul);
 
-        // Добавляем обработчик кликов на контейнер (делегирование событий)
+        // Делаем id кликабельным (copy to clipboard).
         modelsContainer.addEventListener('click', function(event) {
             const target = event.target;
             if (target.classList.contains('clickable-model-id') || target.closest('.clickable-model-id')) {
@@ -103,37 +92,33 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
-    // Первоначальная загрузка списка моделей при загрузке страницы не предусмотрена этим скриптом,
-    // так как он рендерится сервером. Эта функция будет использоваться только после ручного обновления.
+    // Загрузка списка моделей по запросу (ручное обновление из UI).
     const refreshForm = document.getElementById('refresh_models_form');
     if (refreshForm) {
         refreshForm.addEventListener('submit', async function(event) {
             event.preventDefault();
-            showModelNotification('Обновление списка моделей...', 'info'); // Используем 'info' для Bootstrap
+            showModelNotification('Обновление списка моделей...', 'info');
             try {
-                // Убедимся, что URLS.ui_api_refresh_models определен в HTML
                 if (typeof URLS === 'undefined' || typeof URLS.ui_api_refresh_models === 'undefined') {
                     showModelNotification('Ошибка: URL для обновления моделей не определен.', 'error');
                     console.error("URLS.ui_api_refresh_models is not defined.");
                     return;
                 }
-
                 const response = await fetch(URLS.ui_api_refresh_models, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json'
                     },
-                    credentials: 'same-origin' // Добавляем эту строку
+                    credentials: 'same-origin'
                 });
                 const result = await response.json();
                 if (response.ok && result.status === 'success') {
                     showModelNotification(result.message || 'Список моделей успешно обновлен.', 'success');
-                    renderModelsList(result.models, result.error_message); // Обновляем список на странице
+                    renderModelsList(result.models, result.error_message);
                 } else {
-                    // Если API вернуло ошибку или статус не success
                     const detailMessage = result.detail || (result.error_message || 'Ошибка при обновлении списка моделей.');
                     showModelNotification(detailMessage, 'error');
-                    renderModelsList(null, detailMessage); // Показываем ошибку в области списка
+                    renderModelsList(null, detailMessage);
                 }
             } catch (err) {
                 showModelNotification('Сетевая ошибка при обновлении списка моделей.', 'error');
