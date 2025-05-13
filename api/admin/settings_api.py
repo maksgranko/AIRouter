@@ -156,7 +156,7 @@ async def ui_api_add_openai_instance(
     # Уведомляем ModuleRegistry о необходимости перезагрузки конфигурации
     module_registry = request.app.state.module_registry
     if hasattr(module_registry, 'reload_module_config'):
-        await module_registry.reload_module_config("openai_compat", new_config=instances) # Предполагаем такой метод
+        await module_registry.reload_module_config("OAIC", new_config=instances) # Предполагаем такой метод
 
     return JSONResponse(content={"status": "success", "message": f"OpenAI Compatible instance '{payload.name}' added."})
 
@@ -175,7 +175,7 @@ async def ui_api_delete_openai_instance(
 
     module_registry = request.app.state.module_registry
     if hasattr(module_registry, 'reload_module_config'):
-        await module_registry.reload_module_config("openai_compat", new_config=instances)
+        await module_registry.reload_module_config("OAIC", new_config=instances)
 
     return JSONResponse(content={"status": "success", "message": f"OpenAI Compatible instance '{instance_name}' deleted."})
 
@@ -202,7 +202,7 @@ async def ui_api_add_openai_instance_key(
 
     module_registry = request.app.state.module_registry
     if hasattr(module_registry, 'reload_module_config'):
-        await module_registry.reload_module_config("openai_compat", new_config=instances)
+        await module_registry.reload_module_config("OAIC", new_config=instances)
         
     return JSONResponse(content={"status": "success", "message": f"API key added to instance '{instance_name}'."})
 
@@ -233,7 +233,7 @@ async def ui_api_delete_openai_instance_key(
 
     module_registry = request.app.state.module_registry
     if hasattr(module_registry, 'reload_module_config'):
-        await module_registry.reload_module_config("openai_compat", new_config=instances)
+        await module_registry.reload_module_config("OAIC", new_config=instances)
 
     message = f"API key removed from instance '{instance_name}'." if key_found_and_removed else f"API key not found in instance '{instance_name}', no changes made."
     return JSONResponse(content={"status": "success", "message": message})

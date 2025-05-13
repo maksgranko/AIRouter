@@ -83,7 +83,7 @@ def ensure_config_files_exist():
                 "force_proxy_rotation_after_request": False, 
                 "select_random_proxy_each_request": False # Переименованная настройка
             },
-            "module_statuses": {"openai": True, "gemini": True, "openai_compat": True}, # Добавлен статус для нового модуля
+            "module_statuses": {"openai": True, "gemini": True, "OAIC": True}, # Добавлен статус для нового модуля
             "require_airouter_api_key": False 
         }
     }
@@ -245,7 +245,7 @@ if openai_instances_config: # Регистрируем модуль только
          proxy_manager=proxy_manager,
          settings_file_path=SETTINGS_FILE,
          # api_key_manager не передается напрямую, ключи в instances_config
-     ), name="openai_compat") # Регистрируем под именем "openai_compat"
+     )) # Регистрируем под именем "OAIC"
 else:
     print("Warning: No OpenAI Compatible instances configured. OpenAI Compatible module will not be registered.")
 

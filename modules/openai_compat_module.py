@@ -13,10 +13,26 @@ import random # Для генерации ID
 logger = logging.getLogger(__name__)
 
 from typing import List # Добавлено для List[Dict[str, Any]]
-
-# Убрана GEMINI_API_BASE_URL, так как base_url будет приходить из конфигурации инстанса
-
 class OpenAICompatModule(BaseModule):
+
+    @staticmethod
+    def parse_instance_and_model_id(model_identifier: str):
+        """
+        Парсер для нового id:
+        OAIC/{instance}/{provider_path}
+        Возвращает: (instance_name: str, provider_model_path: str)
+        """
+        if not isinstance(model_identifier, str):
+            return None, None
+        if model_identifier.startswith("OAIC/"):
+            parts = model_identifier.split("/", 2)
+            if len(parts) < 3:
+                return None, None
+            instance = parts[1]
+            provider_model_path = parts[2]
+            return instance, provider_model_path
+        return None, None
+
     def __init__(self, 
                  instances_config: List[Dict[str, Any]], 
                  proxy_manager: ProxyManager, 
@@ -50,7 +66,7 @@ class OpenAICompatModule(BaseModule):
 
 
     def get_name(self) -> str: # Общее имя модуля
-        return "openai_compat"
+        return "OAIC"
 
     def _get_httpx_proxies(self, proxy_config: Optional[ProxyConfig]) -> Optional[Dict[str, str]]:
         if proxy_config:
@@ -69,6 +85,7 @@ class OpenAICompatModule(BaseModule):
         return None
 
     def _get_instance_config(self, instance_name: str) -> Optional[Dict[str, Any]]:
+        logger.info(self.instances_config)
         for conf in self.instances_config:
             if conf["name"] == instance_name:
                 return conf
@@ -87,7 +104,7 @@ class OpenAICompatModule(BaseModule):
         self,
         instance_name: str, # Добавлен параметр для имени инстанса
         method: str,
-        endpoint_path: str, # Это будет относительный путь, например, /v1/chat/completions
+        endpoint_path: str, # Это будет относительный путь, например, /chat/completions
         payload: Optional[Dict[str, Any]] = None,
         extra_headers: Optional[Dict[str, str]] = None
     ) -> Dict[str, Any]:
@@ -374,29 +391,21 @@ class OpenAICompatModule(BaseModule):
 
     async def chat_completion(self, request: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
         model_identifier = request.get("model", "")
-        parts = model_identifier.split('/', 1)
-        if len(parts) != 2 or not parts[0].startswith("openai_"): # Expects "openai_INSTANCENAME/actual_model"
+        instance_name, actual_model_name = self.parse_instance_and_model_id(model_identifier)
+        if not instance_name or not actual_model_name:
             logger.error(f"Invalid model identifier format for OpenAI Compatible module: {model_identifier}")
-            yield {"error": {"message": f"Invalid model identifier format. Expected 'openai_INSTANCE_NAME/model_name', got '{model_identifier}'.", "type": "invalid_request_error"}}
+            yield {"error": {"message": f"Invalid model identifier format. Expected 'oai_compat_INSTANCE_NAME/model_name' or 'openai_INSTANCE_NAME/model_name', got '{model_identifier}'.", "type": "invalid_request_error"}}
             return
-        
-        instance_prefix, actual_model_name = parts
-        instance_name = instance_prefix[len("openai_"):]
 
-        # The payload for OpenAI Compatible API is usually the same as the request body.
-        # We might remove 'model' if the target API doesn't expect it or if base_url implies it.
-        # For now, let's assume the target API handles the 'model' field within the payload correctly.
-        # Or, if the target API's /v1/chat/completions doesn't use 'model' in payload, remove it:
-        # payload_to_send = request.copy()
-        # payload_to_send.pop("model", None) 
-        payload_to_send = request # Send the original request payload
+        # В ответе клиента был id instance/modelpath, на провайдера отправляем только provider_model_path!
+        payload_to_send = dict(request)
+        payload_to_send["model"] = actual_model_name
 
-        logger.debug(f"OpenAI Compatible chat_completion for instance '{instance_name}', model '{actual_model_name}'. Request: {request}")
+        logger.debug(f"OpenAI Compatible chat_completion for instance '{instance_name}', model '{actual_model_name}'. Request: {payload_to_send}")
 
-        async for chunk in self._execute_streaming_with_rotation(instance_name, "/v1/chat/completions", payload_to_send):
-            # Add instance_name to the chunk for clarity, if not already present in a standard way
-            if isinstance(chunk, dict) and "id" in chunk: # Heuristic for a valid chunk
-                 chunk["instance_name"] = instance_name # Custom field for debugging/logging on client side
+        async for chunk in self._execute_streaming_with_rotation(instance_name, "/chat/completions", payload_to_send):
+            if isinstance(chunk, dict) and "id" in chunk:
+                chunk["instance_name"] = instance_name
             yield chunk
 
 
@@ -406,15 +415,16 @@ class OpenAICompatModule(BaseModule):
             instance_name = instance_conf["name"]
             logger.debug(f"Listing models for OpenAI Compatible instance: {instance_name}")
             try:
-                # Each instance is like a mini-OpenAI, so it has its own /v1/models endpoint
-                instance_models_response = await self._execute_non_streaming_with_rotation(instance_name, "GET", "/v1/models")
+                # Each instance is like a mini-OpenAI, so it has its own /models endpoint
+                instance_models_response = await self._execute_non_streaming_with_rotation(instance_name, "GET", "/models")
                 
                 if instance_models_response and "data" in instance_models_response:
                     for model_data in instance_models_response["data"]:
                         # Prepend instance name to model ID
                         original_model_id = model_data.get("id", "unknown_model")
-                        model_data["id"] = f"openai_{instance_name}/{original_model_id}"
-                        model_data["owned_by"] = instance_name # Clarify ownership
+                        # Новый формат: только instance/model_path, без OAIC!
+                        model_data["id"] = f"{instance_name}/{original_model_id}"
+                        model_data["owned_by"] = instance_name
                         all_instance_models.append(model_data)
                 else:
                     logger.warning(f"No 'data' field in list_models response from instance {instance_name}. Response: {instance_models_response}")
@@ -430,38 +440,30 @@ class OpenAICompatModule(BaseModule):
 
     async def completion(self, request: Dict[str, Any]) -> Dict[str, Any]:
         model_identifier = request.get("model", "")
-        parts = model_identifier.split('/', 1)
-        if len(parts) != 2 or not parts[0].startswith("openai_"):
-            raise HTTPException(status_code=400, detail=f"Invalid model format for completion. Expected 'openai_INSTANCE_NAME/model_name'.")
-        instance_name = parts[0][len("openai_"):]
-        
-        # payload_to_send = request.copy()
-        # payload_to_send.pop("model", None) # If target API doesn't expect model in payload for this endpoint
-        payload_to_send = request
+        instance_name, actual_model_name = self.parse_instance_and_model_id(model_identifier)
+        if not instance_name or not actual_model_name:
+            raise HTTPException(status_code=400, detail=f"Invalid model format for completion. Expected 'oai_compat_INSTANCE_NAME/model_name' or 'openai_INSTANCE_NAME/model_name', got '{model_identifier}'.")
 
-        return await self._execute_non_streaming_with_rotation(instance_name, "POST", "/v1/completions", payload_to_send)
+        # На провайдера отправляем только provider_model_path!
+        payload_to_send = dict(request)
+        payload_to_send["model"] = actual_model_name
+
+        return await self._execute_non_streaming_with_rotation(instance_name, "POST", "/completions", payload_to_send)
 
     async def embeddings(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        model_identifier = request.get("model", "") # Embeddings might use a model name or it might be implicit
-        instance_name = "default" # Placeholder, decide how to route embeddings if model name doesn't specify instance
-
-        if '/' in model_identifier and model_identifier.startswith("openai_"):
-            parts = model_identifier.split('/', 1)
-            instance_name = parts[0][len("openai_"):]
-        else:
-            # If no instance in model, try to find a "default" or first configured instance?
-            # Or require instance prefix for all calls. For now, let's assume a default or error.
+        model_identifier = request.get("model", "")  # Embeddings might use a model name or it might be implicit
+        instance_name, actual_model_name = self.parse_instance_and_model_id(model_identifier)
+        if not instance_name:
+            # Если instance_name не удалось разобрать, fallback (как до этого)
             if self.instances_config:
-                instance_name = self.instances_config[0]["name"] # Fallback to first instance
+                instance_name = self.instances_config[0]["name"]
                 logger.warning(f"Embeddings call for model '{model_identifier}' without instance prefix, falling back to instance '{instance_name}'.")
             else:
                 raise HTTPException(status_code=400, detail="No OpenAI Compatible instances configured for embeddings.")
 
-        # payload_to_send = request.copy()
-        # payload_to_send.pop("model", None) # If target API doesn't expect model in payload
         payload_to_send = request
-        
-        return await self._execute_non_streaming_with_rotation(instance_name, "POST", "/v1/embeddings", payload_to_send)
+
+        return await self._execute_non_streaming_with_rotation(instance_name, "POST", "/embeddings", payload_to_send)
 
     async def moderations(self, request: Dict[str, Any]) -> Dict[str, Any]:
         # Moderations usually don't have a model, or have a specific one.
@@ -471,7 +473,7 @@ class OpenAICompatModule(BaseModule):
         if not instance_name:
              raise HTTPException(status_code=500, detail="No OpenAI Compatible instances configured for moderations.")
         logger.info(f"Routing moderations request to instance: {instance_name}")
-        return await self._execute_non_streaming_with_rotation(instance_name, "POST", "/v1/moderations", request)
+        return await self._execute_non_streaming_with_rotation(instance_name, "POST", "/moderations", request)
 
     async def generate_image(self, request: Dict[str, Any]) -> Dict[str, Any]:
         # Similar to moderations, decide routing strategy. Assume first instance for now.
@@ -479,18 +481,18 @@ class OpenAICompatModule(BaseModule):
         if not instance_name:
              raise HTTPException(status_code=500, detail="No OpenAI Compatible instances configured for image generation.")
         logger.info(f"Routing image generation request to instance: {instance_name}")
-        return await self._execute_non_streaming_with_rotation(instance_name, "POST", "/v1/images/generations", request)
+        return await self._execute_non_streaming_with_rotation(instance_name, "POST", "/images/generations", request)
 
     async def audio_transcription(self, request_params: Dict[str, Any], file_data: bytes, filename: str) -> Dict[str, Any]:
         # Audio requests often include a model. Use that to determine instance.
         model_identifier = request_params.get("model", "")
-        instance_name = self.instances_config[0]["name"] if self.instances_config else None # Default
-        
-        if '/' in model_identifier and model_identifier.startswith("openai_"):
-            parts = model_identifier.split('/', 1)
-            instance_name = parts[0][len("openai_"):]
-        elif not instance_name:
-             raise HTTPException(status_code=500, detail="No OpenAI Compatible instances configured for audio transcription.")
+        instance_name, actual_model_name = self.parse_instance_and_model_id(model_identifier)
+        if not instance_name:
+            if self.instances_config:
+                instance_name = self.instances_config[0]["name"]
+                logger.warning(f"Audio transcription for model '{model_identifier}' without instance prefix, fallback to instance '{instance_name}'.")
+            else:
+                raise HTTPException(status_code=500, detail="No OpenAI Compatible instances configured for audio transcription.")
 
         logger.info(f"Routing audio transcription to instance: {instance_name} for model {model_identifier}")
 
@@ -511,7 +513,7 @@ class OpenAICompatModule(BaseModule):
         if not api_key:
             raise HTTPException(status_code=503, detail=f"No API key for instance '{instance_name}'.")
 
-        target_url = f"{base_url.rstrip('/')}/v1/audio/transcriptions"
+        target_url = f"{base_url.rstrip('/')}/audio/transcriptions"
         headers = {"Authorization": f"Bearer {api_key}"} # No Content-Type for multipart
 
         httpx_proxies = None
@@ -546,13 +548,13 @@ class OpenAICompatModule(BaseModule):
     async def audio_translation(self, request_params: Dict[str, Any], file_data: bytes, filename: str) -> Dict[str, Any]:
         # Similar logic to transcription
         model_identifier = request_params.get("model", "")
-        instance_name = self.instances_config[0]["name"] if self.instances_config else None
-
-        if '/' in model_identifier and model_identifier.startswith("openai_"):
-            parts = model_identifier.split('/', 1)
-            instance_name = parts[0][len("openai_"):]
-        elif not instance_name:
-             raise HTTPException(status_code=500, detail="No OpenAI Compatible instances configured for audio translation.")
+        instance_name, actual_model_name = self.parse_instance_and_model_id(model_identifier)
+        if not instance_name:
+            if self.instances_config:
+                instance_name = self.instances_config[0]["name"]
+                logger.warning(f"Audio translation for model '{model_identifier}' without instance prefix, fallback to instance '{instance_name}'.")
+            else:
+                raise HTTPException(status_code=500, detail="No OpenAI Compatible instances configured for audio translation.")
 
         logger.info(f"Routing audio translation to instance: {instance_name} for model {model_identifier}")
 
@@ -567,7 +569,7 @@ class OpenAICompatModule(BaseModule):
         if not api_key:
             raise HTTPException(status_code=503, detail=f"No API key for instance '{instance_name}'.")
 
-        target_url = f"{base_url.rstrip('/')}/v1/audio/translations"
+        target_url = f"{base_url.rstrip('/')}/audio/translations"
         headers = {"Authorization": f"Bearer {api_key}"}
 
         httpx_proxies = None

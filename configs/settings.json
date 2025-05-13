@@ -6,7 +6,8 @@
   },
   "module_statuses": {
     "openai": false,
-    "gemini": true
+    "gemini": true,
+    "OAIC": true
   },
-  "require_airouter_api_key": true
+  "require_airouter_api_key": false
 }

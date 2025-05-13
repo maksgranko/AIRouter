@@ -38,11 +38,11 @@ def get_module(request: Request, request_data: dict):
     if model_identifier.startswith("openai_") and '/' in model_identifier:
         try:
             # Все запросы к openai_INSTANCENAME/... должны идти к одному модулю OpenAICompatModule
-            module = registry.get("openai_compat") # Предполагаемое имя регистрации нового модуля
+            module = registry.get("OAIC") # Предполагаемое имя регистрации нового модуля
             return module
         except KeyError:
-            # Если модуль "openai_compat" не найден, это проблема конфигурации
-            logger.error(f"OpenAI Compatible module ('openai_compat') not found in registry for identifier: '{model_identifier}'.")
+            # Если модуль "OAIC" не найден, это проблема конфигурации
+            logger.error(f"OpenAI Compatible module ('OAIC') not found in registry for identifier: '{model_identifier}'.")
             # Продолжаем поиск, возможно, это старый "openai" модуль или другой.
             pass
 
@@ -150,7 +150,7 @@ async def retrieve_model(model_id: str, request: Request): # Добавляем 
     # Попытка 2: model_id содержит префикс инстанса/сервиса (например, "openai_instance1/gpt-4" или "gemini/gemini-pro")
     if '/' in model_id:
         service_or_instance_prefix = model_id.split('/')[0]
-        module_to_try_name = "openai_compat" if service_or_instance_prefix.startswith("openai_") else service_or_instance_prefix
+        module_to_try_name = "OAIC" if service_or_instance_prefix.startswith("openai_") else service_or_instance_prefix
         
         try:
             module = registry.get(module_to_try_name)
