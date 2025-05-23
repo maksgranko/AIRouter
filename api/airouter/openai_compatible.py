@@ -6,6 +6,8 @@ from typing import AsyncGenerator, Dict, Any, Optional
 from fastapi import APIRouter, Form, Request, UploadFile, HTTPException
 from fastapi.responses import StreamingResponse
 
+from handlers.misc.one_messager import reformat_messages
+
 # Получаем глобальный registry и logger из app.state, если они там есть,
 # или импортируем напрямую, если это возможно и безопасно.
 # Для этого эндпоинты должны принимать Request и получать доступ к app.state.
@@ -109,13 +111,17 @@ async def chat_completions(request: Request):
 @router.post("/v1/completions")
 async def completions(request: Request):
     body = await request.json()
-    module = get_module(request, body) # Передаем request
+    logger.debug(f"Received /v1/completions request body: " + reformat_messages(body))
+    # logger.debug(f"Received /v1/completions request body: {json.dumps(body, indent=2)}")
+    module = get_module(request, body)
     return await module.completion(body)
 
 @router.post("/v1/embeddings")
 async def embeddings(request: Request):
     body = await request.json()
-    module = get_module(request, body) # Передаем request
+    logger.debug(f"Received /v1/embeddings request body: " + reformat_messages(body))
+    # logger.debug(f"Received /v1/embeddings request body: {json.dumps(body, indent=2)}")
+    module = get_module(request, body)
     return await module.embeddings(body)
 
 @router.get("/v1/models")

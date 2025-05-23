@@ -1,14 +1,13 @@
 import httpx
 from httpx_socks import AsyncProxyTransport
 from typing import Dict, Any, Optional, AsyncGenerator
+
 from .base_module import BaseModule
 from api_key_manager import ApiKeyManager
 from proxy_manager import ProxyManager, ProxyConfig
 import logging
 from fastapi import HTTPException
 import json
-import time
-import random
 
 logger = logging.getLogger(__name__)
 
@@ -206,8 +205,6 @@ class OpenAICompatModule(BaseModule):
             yield {"error": {"message": f"No API keys for instance '{instance_name}'.", "type": "server_error", "code": "no_api_keys"}}
             return
 
-        key_exhausted_message = f"All API keys for instance {instance_name} are exhausted or failed for streaming."
-
         current_proxy_config = None
         httpx_proxies = None
         if self.proxy_manager.active:
@@ -278,6 +275,7 @@ class OpenAICompatModule(BaseModule):
                             if data_content == "[DONE]":
                                 logger.debug(f"Stream for instance '{instance_name}' ended with [DONE].")
                                 break
+                            logger.debug(f"Received stream message for instance '{instance_name}': {data_content}")
                             try:
                                 chunk_obj = json.loads(data_content)
                                 yield chunk_obj
