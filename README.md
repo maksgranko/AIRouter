@@ -1,6 +1,22 @@
+# Сборка и развёртывание DOCKER
+
+Сборка:
+
+- **Linux/MacOS**
+  docker build -t ayrongamesdickovich/airouter:latest . && docker push ayrongamesdickovich/airouter:latest
+- **Windows**
+  docker build -t ayrongamesdickovich/airouter:latest . ; docker push ayrongamesdickovich/airouter:latest
+
+Выполнение на сервере:
+
+- **Linux/MacOS**
+  docker pull ayrongamesdickovich/airouter:latest && docker run -d -p 80:8000 --env-file ./airouter.env ayrongamesdickovich/airouter:latest
+- **Windows**
+  docker pull ayrongamesdickovich/airouter:latest ; docker run -d -p 80:8000 --env-file ./airouter.env ayrongamesdickovich/airouter:latest
+
 # AI API Роутер
 
-Этот проект представляет собой OpenAI-совместимый API роутер, который позволяет направлять запросы к различным AI-сервисам (модулям), таким как OpenAI и Gemini. Он поддерживает управление API ключами, использование прокси-серверов с ротацией, а также имеет веб-панель администратора для управления конфигурацией. Версия приложения: **1.1.0a**.
+Этот проект представляет собой OpenAI-совместимый API роутер, который позволяет направлять запросы к различным AI-сервисам (модулям), таким как OpenAI и Gemini. Он поддерживает управление API ключами, использование прокси-серверов с ротацией, а также имеет веб-панель администратора для управления конфигурацией. Версия приложения: **1.1.2a**.
 
 ## Возможности
 
