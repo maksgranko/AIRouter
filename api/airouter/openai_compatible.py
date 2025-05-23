@@ -123,10 +123,18 @@ async def list_models(request: Request): # Добавляем request для д�
     all_models = []
     registry = request.app.state.module_registry # Получаем registry из app.state
     for mod in registry.all_active_modules(): 
+        module_name = mod.get_name() # Получаем имя модуля
         try:
-            models = await mod.list_models()
-            all_models.extend(models.get("data", []))
-        except Exception: 
+            models_response = await mod.list_models()
+            if models_response and "data" in models_response:
+                for model_data in models_response["data"]:
+                    if isinstance(model_data, dict) and 'id' in model_data:
+                        # Добавляем префикс модуля, если его еще нет
+                        if not model_data['id'].startswith(f"{module_name}/"):
+                            model_data['id'] = f"{module_name}/{model_data['id']}"
+                    all_models.append(model_data)
+        except Exception as e: 
+            logger.error(f"Error fetching models from module {module_name} for /v1/models: {e}")
             continue
     return {"object": "list", "data": all_models}
 
