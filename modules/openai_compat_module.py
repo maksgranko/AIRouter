@@ -1,6 +1,6 @@
 import httpx
 from httpx_socks import AsyncProxyTransport
-from typing import Dict, Any, Optional, AsyncGenerator
+from typing import Dict, Any, Optional, AsyncGenerator, List
 
 from .base_module import BaseModule
 from api_key_manager import ApiKeyManager
@@ -9,9 +9,13 @@ import logging
 from fastapi import HTTPException
 import json
 
+# Импортируем функцию reformat_messages
+from handlers.misc.one_messager import reformat_messages
+# Импортируем функцию для получения настроек reformat_messages
+from admin_router import get_reformat_settings
+
 logger = logging.getLogger(__name__)
 
-from typing import List
 class OpenAICompatModule(BaseModule):
 
     @staticmethod
@@ -303,6 +307,28 @@ class OpenAICompatModule(BaseModule):
 
         payload_to_send = dict(request)
         payload_to_send["model"] = actual_model_name
+
+        # Проверяем настройку reformat_messages
+        reformat_settings = get_reformat_settings()
+        module_reformat_settings = reformat_settings.get(self.get_name(), {})
+        
+        # model_id в настройках хранится как "module_name/model_id", но здесь model_id уже без префикса модуля
+        # Поэтому нужно использовать model_identifier, который включает префикс модуля
+        # Или же, если model.id в admin_models.html уже содержит префикс, то model_id будет "OAIC/instance/model"
+        # В данном случае model_identifier уже имеет формат "OAIC/instance/model",
+        # а actual_model_name - это "instance/model".
+        # Нам нужно проверить настройку для полного model_identifier, который приходит в запросе.
+        # Или же, если model.id в admin_models.html уже содержит префикс, то model_id будет "OAIC/instance/model"
+        # В admin_router.py set_reformat_setting принимает model_id и module_name.
+        # model_id в admin_router.py будет "instance/model" (без OAIC), а module_name будет "OAIC".
+        # Поэтому здесь нужно проверять по actual_model_name и self.get_name().
+        
+        if module_reformat_settings.get(actual_model_name, False):
+            logger.debug(f"Reformat messages enabled for model '{actual_model_name}' in module '{self.get_name()}'. Applying reformat_messages.")
+            if "messages" in payload_to_send:
+                payload_to_send["messages"] = [{"role": "user", "content": reformat_messages(payload_to_send["messages"])}]
+            else:
+                logger.warning(f"Reformat messages enabled for model '{actual_model_name}', but no 'messages' found in payload.")
 
         logger.debug(f"OpenAI Compatible chat_completion for instance '{instance_name}', model '{actual_model_name}'. Request: {payload_to_send}")
 

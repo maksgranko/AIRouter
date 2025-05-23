@@ -37,14 +37,21 @@ function renderModelsList(models, errorMessage) {
             const li = document.createElement('li');
             li.className = 'list-group-item';
             li.innerHTML = `
-                <div class="d-flex w-100 justify-content-between">
+                <div class="d-flex w-100 justify-content-between align-items-center">
                     <h5 class="mb-1 model-id clickable-model-id" data-model-id="${model.id}" title="Нажмите, чтобы скопировать ID">${model.id}</h5>
+                    <div class="form-check form-switch">
+                        <input class="form-check-input reformat-messages-checkbox" type="checkbox" id="reformatSwitch-${model.id.replace(/\//g, '-')}" data-model-id="${model.id}" data-module-name="${model.owned_by || 'N/A'}">
+                        <label class="form-check-label" for="reformatSwitch-${model.id.replace(/\//g, '-')}">Переформировать сообщения в одно</label>
+                    </div>
                 </div>
                 <p class="mb-1 model-owner">Владелец: ${model.owned_by || 'N/A'}</p>
             `;
             ul.appendChild(li);
         });
         modelsContainer.appendChild(ul);
+
+        // После рендеринга моделей, загружаем и применяем состояния чекбоксов
+        loadReformatSettings();
 
         // Делаем id кликабельным (copy to clipboard).
         modelsContainer.addEventListener('click', function(event) {
@@ -63,6 +70,39 @@ function renderModelsList(models, errorMessage) {
             }
         });
 
+        // Добавляем обработчик для чекбоксов reformat-messages-checkbox
+        modelsContainer.addEventListener('change', async function(event) {
+            const target = event.target;
+            if (target.classList.contains('reformat-messages-checkbox')) {
+                const modelId = target.dataset.modelId;
+                const moduleName = target.dataset.moduleName;
+                const isEnabled = target.checked;
+
+                showModelNotification(`Сохранение настройки для ${modelId}...`, 'info');
+                try {
+                    const response = await fetch(URLS.ui_api_set_reformat_status, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ model_id: modelId, module_name: moduleName, is_reformat_enabled: isEnabled }),
+                        credentials: 'same-origin'
+                    });
+                    const result = await response.json();
+                    if (response.ok && result.status === 'success') {
+                        showModelNotification(result.message || `Настройка для ${modelId} успешно сохранена.`, 'success');
+                    } else {
+                        showModelNotification(result.detail || `Ошибка при сохранении настройки для ${modelId}.`, 'error');
+                        target.checked = !isEnabled; // Откатываем состояние чекбокса при ошибке
+                    }
+                } catch (err) {
+                    showModelNotification(`Сетевая ошибка при сохранении настройки для ${modelId}.`, 'error');
+                    console.error("Reformat setting save error:", err);
+                    target.checked = !isEnabled; // Откатываем состояние чекбокса при ошибке
+                }
+            }
+        });
+
     } else if (!errorMessage) {
         const infoDiv = document.createElement('div');
         infoDiv.className = 'alert alert-info';
@@ -72,8 +112,47 @@ function renderModelsList(models, errorMessage) {
     }
 }
 
+async function loadReformatSettings() {
+    try {
+        if (typeof URLS === 'undefined' || typeof URLS.ui_api_get_reformat_settings === 'undefined') {
+            console.error("URLS.ui_api_get_reformat_settings is not defined.");
+            return;
+        }
+        const response = await fetch(URLS.ui_api_get_reformat_settings, {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            credentials: 'same-origin'
+        });
+        const result = await response.json();
+        if (response.ok && result.status === 'success') {
+            const settings = result.settings; // Ожидаем объект { module_name: { model_id: bool } }
+            document.querySelectorAll('.reformat-messages-checkbox').forEach(checkbox => {
+                const modelId = checkbox.dataset.modelId;
+                const moduleName = checkbox.dataset.moduleName;
+                if (settings[moduleName] && settings[moduleName][modelId] !== undefined) {
+                    checkbox.checked = settings[moduleName][modelId];
+                } else {
+                    checkbox.checked = false; // По умолчанию выключено, если нет в конфиге
+                }
+            });
+        } else {
+            console.error("Failed to load reformat settings:", result.detail || "Unknown error");
+        }
+    } catch (err) {
+        console.error("Network error loading reformat settings:", err);
+    }
+}
+
+
 document.addEventListener('DOMContentLoaded', function() {
     const modelsContainer = document.getElementById('models_list_container');
+    // Обработчик клика для копирования ID модели уже есть в renderModelsList,
+    // но если список моделей не рендерится динамически при загрузке,
+    // то этот обработчик нужен здесь.
+    // В текущей реализации renderModelsList вызывается после загрузки,
+    // поэтому этот блок можно убрать, но оставлю на случай, если логика изменится.
     if (modelsContainer) {
         modelsContainer.addEventListener('click', function(event) {
             const target = event.target;
@@ -126,4 +205,10 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
+});
+
+// Добавляем новые URLS
+Object.assign(URLS, {
+    ui_api_set_reformat_status: "{{ url_for('ui_api_set_reformat_status') }}",
+    ui_api_get_reformat_settings: "{{ url_for('ui_api_get_reformat_settings') }}"
 });

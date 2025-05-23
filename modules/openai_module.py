@@ -1,5 +1,5 @@
 import openai
-from typing import Dict, Any, Callable, Optional
+from typing import Dict, Any, Callable, Optional, AsyncGenerator
 from .base_module import BaseModule
 from api_key_manager import ApiKeyManager
 from proxy_manager import ProxyManager, ProxyConfig
@@ -8,6 +8,11 @@ import logging
 import io
 from fastapi import HTTPException
 import json
+
+# Импортируем функцию reformat_messages
+from handlers.misc.one_messager import reformat_messages
+# Импортируем функцию для получения настроек reformat_messages
+from admin_router import get_reformat_settings
 
 logger = logging.getLogger(__name__)
 
@@ -165,10 +170,49 @@ class OpenAIChatModule(BaseModule):
                      break
 
     async def chat_completion(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        return await self._execute_with_rotation(lambda: openai.ChatCompletion.create(**request))
+        payload_to_send = dict(request)
+        
+        reformat_settings = get_reformat_settings()
+        module_reformat_settings = reformat_settings.get(self.get_name(), {})
+        
+        # model_id в настройках хранится как "module_name/model_id"
+        # Здесь model_id - это просто имя модели, например "gpt-3.5-turbo"
+        # Поэтому нужно проверять по payload_to_send.get("model") и self.get_name().
+        
+        if module_reformat_settings.get(payload_to_send.get("model", ""), False):
+            logger.debug(f"Reformat messages enabled for model '{payload_to_send.get('model')}' in module '{self.get_name()}'. Applying reformat_messages.")
+            if "messages" in payload_to_send:
+                payload_to_send["messages"] = [{"role": "user", "content": reformat_messages(payload_to_send["messages"])}]
+            else:
+                logger.warning(f"Reformat messages enabled for model '{payload_to_send.get('model')}', but no 'messages' found in payload.")
+
+        return await self._execute_with_rotation(lambda: openai.ChatCompletion.create(**payload_to_send))
 
     async def completion(self, request: Dict[str, Any]) -> Dict[str, Any]:
-        return await self._execute_with_rotation(lambda: openai.Completion.create(**request))
+        payload_to_send = dict(request)
+
+        reformat_settings = get_reformat_settings()
+        module_reformat_settings = reformat_settings.get(self.get_name(), {})
+
+        if module_reformat_settings.get(payload_to_send.get("model", ""), False):
+            logger.debug(f"Reformat messages enabled for model '{payload_to_send.get('model')}' in module '{self.get_name()}'. Applying reformat_messages.")
+            if "prompt" in payload_to_send:
+                # Для completions, reformat_messages может быть применена к prompt
+                # Однако, reformat_messages предназначена для списка сообщений.
+                # Если prompt - это строка, то reformat_messages не применима напрямую.
+                # Если prompt - это список строк, то можно объединить.
+                # Предполагаем, что reformat_messages работает с форматом сообщений чата.
+                # Для completions, если prompt - это строка, то reformat_messages не имеет смысла.
+                # Если prompt - это список строк, то можно объединить.
+                # Пока не буду применять reformat_messages к prompt в completions,
+                # так как это может быть несовместимо с ожидаемым форматом.
+                # Если пользователь явно хочет, чтобы reformat_messages работала с prompt,
+                # нужно будет адаптировать reformat_messages или добавить отдельную логику.
+                logger.warning(f"Reformat messages enabled for model '{payload_to_send.get('model')}' in completions, but 'reformat_messages' is designed for chat messages. Skipping reformatting for 'prompt'.")
+            else:
+                logger.warning(f"Reformat messages enabled for model '{payload_to_send.get('model')}' in completions, but no 'prompt' found in payload.")
+
+        return await self._execute_with_rotation(lambda: openai.Completion.create(**payload_to_send))
 
     async def embeddings(self, request: Dict[str, Any]) -> Dict[str, Any]:
         return await self._execute_with_rotation(lambda: openai.Embedding.create(**request))
