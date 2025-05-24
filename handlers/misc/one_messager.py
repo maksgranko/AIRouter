@@ -1,7 +1,6 @@
 import json
-
-from handlers.misc import finder
 import logging
+from handlers.misc.finder import find_between, find_between_r
 async def reformat_messages(input_json):
     data = json.loads(input_json)
     messages = data.get('messages', [])
@@ -19,9 +18,10 @@ async def reformat_messages(input_json):
                    "DO NOT ATTEMPT TO MANUALLY SIMULATE TOOL OUTPUT. INSTEAD, CALL THE TOOL DIRECTLY. \n"
                    "ALWAYS DEFAULT TO TOOL USE WHEN IT CAN YIELD A MORE ACCURATE, UP-TO-DATE, OR HIGH-FIDELITY RESULT.\n\n\n\n"
                    )
-    before_context = "THE <YOUR_CONTEXT> BLOCK CONTAINS ALL PREVIOUS MESSAGES FROM THE CURRENT CONVERSATION SESSION ARRANGED IN CHRONOLOGICAL ORDER (OLDEST TO NEWEST) - YOU MUST CAREFULLY REVIEW THIS HISTORY TO UNDERSTAND THE CONVERSATION FLOW, IDENTIFY RECURRING THEMES, TRACK USER PREFERENCES AND REQUESTS, REFERENCE SPECIFIC DETAILS FROM EARLIER EXCHANGES, AVOID REPEATING INFORMATION ALREADY PROVIDED, BUILD UPON ESTABLISHED CONTEXT, AND ENSURE YOUR CURRENT RESPONSE IS CONSISTENT WITH AND INFORMED BY THE ENTIRE CONVERSATION THREAD.\n\n"
+    before_context = "THE <YOUR_CONTEXT> BLOCK CONTAINS ALL PREVIOUS MESSAGES FROM THE CURRENT CONVERSATION SESSION ARRANGED IN CHRONOLOGICAL ORDER (OLDEST TO NEWEST) - YOU MUST CAREFULLY REVIEW THIS HISTORY TO UNDERSTAND THE CONVERSATION FLOW, IDENTIFY RECURRING THEMES, TRACK USER PREFERENCES AND REQUESTS, REFERENCE SPECIFIC DETAILS FROM EARLIER EXCHANGES, AVOID REPEATING INFORMATION ALREADY PROVIDED, BUILD UPON ESTABLISHED CONTEXT, AND ENSURE YOUR CURRENT RESPONSE IS CONSISTENT WITH AND INFORMED BY THE ENTIRE CONVERSATION THREAD.\n"
     before_instructions = ""
     instructions = ""
+    user_section = ""
     instructions_exists = False
     if 'cline' in first_message.lower() or 'roo' in first_message.lower():
         instructions = f"<INSTRUCTIONS>{first_message.strip()}</INSTRUCTIONS>\n\n"
@@ -40,19 +40,21 @@ async def reformat_messages(input_json):
 
     context_section = "<YOUR_CONTEXT>\n" + "\n".join(context_blocks) + "\n</YOUR_CONTEXT>\n\n"
     logging.info("Instructions: " + str(instructions_exists))
+    current_user_message = messages[-1]['content'].strip()
     if instructions_exists:
         before_instructions = "THE <INSTRUCTIONS> BLOCK CONTAINS CRITICAL DIRECTIVES THAT OVERRIDE ALL OTHER GUIDANCE AND HAVE ABSOLUTE PRIORITY - YOU MUST FOLLOW EVERY INSTRUCTION EXACTLY AS WRITTEN, USE ALL REQUIRED TOOLS ACTIVELY (NEVER SIMULATE TOOL OUTPUT), COMPLETE ALL SPECIFIED TASKS WITHOUT OMISSION, AND PRIORITIZE INSTRUCTIONS OVER CONVERSATION HISTORY OR GENERAL GUIDELINES.\n"
     if instructions_exists and len(messages) > 2: 
         logging.info("Instructions + messages length > 2 ")
-        current_user_message = messages[-1]['content'].strip()
-        user_section = f"<CURRENT_SYSTEM_MESSAGE>\n{current_user_message}\n</CURRENT_SYSTEM_MESSAGE>"
     elif instructions_exists:
-        user_section = f"<CURRENT_USER_MESSAGE>\n{finder.find_between_r(first_message,"<task>","</task>")}\n</CURRENT_USER_MESSAGE>"
+        user_section = f"<CURRENT_USER_MESSAGE>\n{find_between_r(first_message,"<task>","</task>")}\n</CURRENT_USER_MESSAGE>"
     else:
-        current_user_message = messages[-1]['content'].strip()
         user_section = f"<CURRENT_USER_MESSAGE>\n{current_user_message}\n</CURRENT_USER_MESSAGE>"
-    print(user_section)
-    final_message = main_prompt + user_section + before_context + context_section + before_instructions + instructions 
+    # print(user_section)
+    system_message = find_service_block(current_user_message)
+    if len(system_message) != 0:
+        f"<CURRENT_SYSTEM_MESSAGE>\n{system_message}\n</CURRENT_SYSTEM_MESSAGE>"
+    print(system_message)
+    final_message = main_prompt + system_message + user_section + before_instructions + instructions + before_context + context_section 
     
     data['messages'] = [
         {
@@ -61,3 +63,11 @@ async def reformat_messages(input_json):
         }
     ]
     return json.dumps(data, ensure_ascii=False, indent=4)
+
+def find_service_block(text:str):
+    service_blocks = [["[ERROR]","</environment_details>"]]
+    for i in service_blocks:
+        result = find_between(text,i[0],i[1])
+        if result != "":
+            return f"{i[0]} {result} {i[1]}"
+    return ""

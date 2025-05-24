@@ -328,16 +328,8 @@ class OpenAICompatModule(BaseModule):
         if module_reformat_settings.get(model_identifier, False):
             logger.warning(f"Reformat messages enabled for model '{actual_model_name}' in module '{self.get_name()}'. Applying reformat_messages.")
             if "messages" in payload_to_send:
-                # Преобразуем список сообщений в JSON строку, обернув его в словарь с ключом "messages"
                 messages_json_string = json.dumps(payload_to_send, ensure_ascii=False)
-                f = open("raw_bebra.txt","a")
-                f.write(messages_json_string) 
-                f.close()
                 reformatted_json_string = await reformat_messages(messages_json_string)
-                f = open("bebra.txt","a")
-                f.write(reformatted_json_string) 
-                f.close()
-                # Парсим обратно JSON строку, чтобы получить обновленный список сообщений
                 reformatted_data = json.loads(reformatted_json_string)
                 payload_to_send["messages"] = reformatted_data.get("messages", [])
             else:
