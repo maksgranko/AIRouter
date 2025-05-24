@@ -1,3 +1,4 @@
+import datetime
 import httpx
 from httpx_socks import AsyncProxyTransport
 from typing import Dict, Any, Optional, AsyncGenerator, List
@@ -329,10 +330,13 @@ class OpenAICompatModule(BaseModule):
             if "messages" in payload_to_send:
                 # Преобразуем список сообщений в JSON строку, обернув его в словарь с ключом "messages"
                 messages_json_string = json.dumps(payload_to_send, ensure_ascii=False)
+                f = open("raw_bebra.txt","a")
+                f.write(messages_json_string) 
+                f.close()
                 reformatted_json_string = await reformat_messages(messages_json_string)
-                # f = open("bebra.txt","w")
-                # f.write(reformatted_json_string) 
-                # f.close()
+                f = open("bebra.txt","a")
+                f.write(reformatted_json_string) 
+                f.close()
                 # Парсим обратно JSON строку, чтобы получить обновленный список сообщений
                 reformatted_data = json.loads(reformatted_json_string)
                 payload_to_send["messages"] = reformatted_data.get("messages", [])

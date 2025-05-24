@@ -9,9 +9,7 @@ import io
 from fastapi import HTTPException
 import json
 
-# Импортируем функцию reformat_messages
 from handlers.misc.one_messager import reformat_messages
-# Импортируем функцию для получения настроек reformat_messages
 from admin_router import get_reformat_settings
 
 logger = logging.getLogger(__name__)

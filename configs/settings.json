@@ -36,7 +36,9 @@
       "OAIC/dickgpt/claude-3-sonnet": true,
       "OAIC/dickgpt/claude-3-opus": true,
       "OAIC/dickgpt/claude-3.7-sonnet-thinking": true,
-      "OAIC/dickgpt/claude-3-5-sonnet": true
+      "OAIC/dickgpt/claude-3-5-sonnet": true,
+      "OAIC/dickgpt/claude-3-7-sonnet-20250219": true,
+      "OAIC/dickgpt/claude-3-7-sonnet-20250219-thinking-32k": true
     }
   }
 }
