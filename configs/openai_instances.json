@@ -1,13 +1,5 @@
 [
   {
-    "name": "openrouter_test_0123",
-    "base_url": "https://openrouter.ai/api/v17",
-    "api_keys": [
-      "23424"
-    ],
-    "use_global_proxy": false
-  },
-  {
     "name": "g4f_riga",
     "base_url": "http://146.19.84.231:8080/v1",
     "api_keys": [

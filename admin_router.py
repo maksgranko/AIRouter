@@ -132,8 +132,10 @@ async def get_dashboard_data(request: Request) -> Dict[str, Any]:
         settings_data = _load_settings() # Используем новую функцию
         require_airouter_api_key = settings_data.get("require_airouter_api_key", False)
         force_proxy_rotation_after_request = settings_data.get("proxy_settings", {}).get("force_proxy_rotation_after_request", False)
+        module_proxy_usage = settings_data.get("module_proxy_usage", {})
     except Exception as e:
         print(f"Error reading settings for dashboard data: {e}") 
+        module_proxy_usage = {}
 
     return {
         "proxy_manager_is_active": proxy_manager.active,
@@ -157,7 +159,8 @@ async def get_dashboard_data(request: Request) -> Dict[str, Any]:
         "airouter_keys_file": airouter_key_manager.keys_file_path,
         "openai_instances_file": "configs/openai_instances.json", # Путь к файлу инстансов
         "openai_instances": _load_openai_instances(), # Список инстансов
-        "app_version": request.app.state.app_version
+        "app_version": request.app.state.app_version,
+        "module_proxy_usage": module_proxy_usage
     }
 
 # Импортируем функции для работы с инстансами из settings_api

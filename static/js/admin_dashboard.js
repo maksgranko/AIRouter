@@ -216,7 +216,8 @@ async function loadDashboardData() {
                 if (module_name !== 'OAIC') {
                     const moduleProxyUsage = (data.module_proxy_usage && typeof data.module_proxy_usage[module_name] !== 'undefined')
                         ? data.module_proxy_usage[module_name] : true;
-                    const checkedAttr = moduleProxyUsage ? 'checked' : '';
+                    // разрешаем только строго true, иначе чекбокс снят
+                    const checkedAttr = (moduleProxyUsage === true) ? 'checked' : '';
                     proxySwitchHtml = `
                         <div class="form-check form-switch mb-1">
                             <input class="form-check-input module-proxy-switch" type="checkbox"
