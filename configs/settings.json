@@ -9,7 +9,11 @@
     "gemini": true,
     "OAIC": true
   },
-  "require_airouter_api_key": false,
+  "require_airouter_api_key": true,
+  "module_proxy_usage": {
+    "openai": true,
+    "gemini": true
+  },
   "reformat_messages_settings": {
     "google": {
       "gemini/gemini-1.0-pro-vision-latest": false,

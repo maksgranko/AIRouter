@@ -103,7 +103,9 @@ class OpenAICompatModule(BaseModule):
 
         current_proxy_config = None
         httpx_proxies = None
-        if self.proxy_manager.active:
+        # INDIVIDUAL PROXY LOGIC: учитываем флаг use_global_proxy
+        use_global_proxy = instance_config.get("use_global_proxy", True)
+        if use_global_proxy and self.proxy_manager.active:
             current_proxy_config = self.proxy_manager.get_proxy()
             httpx_proxies = self._get_httpx_proxies(current_proxy_config)
 
@@ -212,7 +214,9 @@ class OpenAICompatModule(BaseModule):
 
         current_proxy_config = None
         httpx_proxies = None
-        if self.proxy_manager.active:
+        # INDIVIDUAL PROXY LOGIC: учитываем флаг use_global_proxy
+        use_global_proxy = instance_config.get("use_global_proxy", True)
+        if use_global_proxy and self.proxy_manager.active:
             current_proxy_config = self.proxy_manager.get_proxy()
             httpx_proxies = self._get_httpx_proxies(current_proxy_config)
         

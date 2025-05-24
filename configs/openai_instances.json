@@ -1,23 +1,26 @@
 [
   {
-    "name": "openrouter_test_0",
-    "base_url": "https://openrouter.ai/api/v1",
+    "name": "openrouter_test_0123",
+    "base_url": "https://openrouter.ai/api/v17",
     "api_keys": [
-      "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"
-    ]
+      "23424"
+    ],
+    "use_global_proxy": false
   },
   {
     "name": "g4f_riga",
     "base_url": "http://146.19.84.231:8080/v1",
     "api_keys": [
       "bebra"
-    ]
+    ],
+    "use_global_proxy": true
   },
   {
     "name": "dickgpt",
     "base_url": "http://213.219.205.126:9898/v1",
     "api_keys": [
       "dildo"
-    ]
+    ],
+    "use_global_proxy": true
   }
 ]

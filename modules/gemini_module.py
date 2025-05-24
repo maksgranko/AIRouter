@@ -79,7 +79,15 @@ class GeminiChatModule(BaseModule):
             while True:
                 current_proxy_config = None
                 httpx_proxies = None
-                if self.proxy_manager.active:
+                # Индивидуальная настройка прокси
+                use_global_proxy = True
+                try:
+                    with open(self.settings_file_path, 'r') as f:
+                        settings_data = json.load(f)
+                        use_global_proxy = settings_data.get("module_proxy_usage", {}).get(self.service_name, True)
+                except Exception as e:
+                    logger.error(f"Error reading module_proxy_usage for {self.service_name}: {e} (defaulting to True)")
+                if use_global_proxy and self.proxy_manager.active:
                     current_proxy_config = self.proxy_manager.get_proxy()
                     httpx_proxies = self._get_httpx_proxies(current_proxy_config)
 
@@ -245,7 +253,15 @@ class GeminiChatModule(BaseModule):
             while True:
                 current_proxy_config = None
                 httpx_proxies = None
-                if self.proxy_manager.active:
+                # Индивидуальная настройка прокси
+                use_global_proxy = True
+                try:
+                    with open(self.settings_file_path, 'r') as f:
+                        settings_data = json.load(f)
+                        use_global_proxy = settings_data.get("module_proxy_usage", {}).get(self.service_name, True)
+                except Exception as e:
+                    logger.error(f"Error reading module_proxy_usage for {self.service_name}: {e} (defaulting to True)")
+                if use_global_proxy and self.proxy_manager.active:
                     current_proxy_config = self.proxy_manager.get_proxy()
                     httpx_proxies = self._get_httpx_proxies(current_proxy_config)
 
