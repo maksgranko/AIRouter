@@ -112,7 +112,6 @@ async def chat_completions(request: Request):
 async def completions(request: Request):
     body = await request.json()
     logger.debug(f"Received /v1/completions request body: " + reformat_messages(body))
-    # logger.debug(f"Received /v1/completions request body: {json.dumps(body, indent=2)}")
     module = get_module(request, body)
     return await module.completion(body)
 
@@ -120,7 +119,6 @@ async def completions(request: Request):
 async def embeddings(request: Request):
     body = await request.json()
     logger.debug(f"Received /v1/embeddings request body: " + reformat_messages(body))
-    # logger.debug(f"Received /v1/embeddings request body: {json.dumps(body, indent=2)}")
     module = get_module(request, body)
     return await module.embeddings(body)
 

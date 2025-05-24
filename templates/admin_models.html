@@ -80,9 +80,11 @@
     </div>
 
     <script>
-        // Определяем URLS глобально для этого скрипта, если он нужен
+        // Определяем URLS глобально для этого скрипта
         const URLS = {
-            ui_api_refresh_models: "{{ url_for('ui_api_refresh_models') }}"
+            ui_api_refresh_models: "{{ url_for('ui_api_refresh_models') }}",
+            ui_api_set_reformat_status: "{{ url_for('ui_api_set_reformat_status') }}",
+            ui_api_get_reformat_settings: "{{ url_for('ui_api_get_reformat_settings') }}"
         };
     </script>
     <script src="{{ url_for('static', path='js/admin_models.js') }}" defer></script>

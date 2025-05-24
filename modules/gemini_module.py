@@ -504,7 +504,7 @@ class GeminiChatModule(BaseModule):
         
         messages_to_process = request.get("messages", [])
         if module_reformat_settings.get(model_name_for_response, False):
-            logger.debug(f"Reformat messages enabled for model '{model_name_for_response}' in module '{self.get_name()}'. Applying reformat_messages.")
+            logger.warning(f"Reformat messages enabled for model '{model_name_for_response}' in module '{self.get_name()}'. Applying reformat_messages.")
             if messages_to_process:
                 # reformat_messages ожидает список сообщений и возвращает объединенную строку
                 # Gemini API ожидает список объектов contents, каждый с role и parts

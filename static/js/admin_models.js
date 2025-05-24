@@ -2,7 +2,10 @@ function showModelNotification(message, type = 'success') {
     const notificationArea = document.getElementById('model_notification_area');
     if (!notificationArea) {
         console.warn("Notification area 'model_notification_area' not found.");
-        alert(message);
+        // Если область уведомлений не найдена, можно использовать alert как запасной вариант,
+        // но в данном случае, если пользователь просит использовать уведомления,
+        // это означает, что notificationArea должна существовать.
+        // alert(message); 
         return;
     }
     const notification = document.createElement('div');
@@ -50,9 +53,6 @@ function renderModelsList(models, errorMessage) {
         });
         modelsContainer.appendChild(ul);
 
-        // После рендеринга моделей, загружаем и применяем состояния чекбоксов
-        loadReformatSettings();
-
         // Делаем id кликабельным (copy to clipboard).
         modelsContainer.addEventListener('click', function(event) {
             const target = event.target;
@@ -66,39 +66,6 @@ function renderModelsList(models, errorMessage) {
                         showModelNotification('Не удалось скопировать ID модели.', 'error');
                         console.error('Clipboard copy failed: ', err);
                     });
-                }
-            }
-        });
-
-        // Добавляем обработчик для чекбоксов reformat-messages-checkbox
-        modelsContainer.addEventListener('change', async function(event) {
-            const target = event.target;
-            if (target.classList.contains('reformat-messages-checkbox')) {
-                const modelId = target.dataset.modelId;
-                const moduleName = target.dataset.moduleName;
-                const isEnabled = target.checked;
-
-                showModelNotification(`Сохранение настройки для ${modelId}...`, 'info');
-                try {
-                    const response = await fetch(URLS.ui_api_set_reformat_status, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({ model_id: modelId, module_name: moduleName, is_reformat_enabled: isEnabled }),
-                        credentials: 'same-origin'
-                    });
-                    const result = await response.json();
-                    if (response.ok && result.status === 'success') {
-                        showModelNotification(result.message || `Настройка для ${modelId} успешно сохранена.`, 'success');
-                    } else {
-                        showModelNotification(result.detail || `Ошибка при сохранении настройки для ${modelId}.`, 'error');
-                        target.checked = !isEnabled; // Откатываем состояние чекбокса при ошибке
-                    }
-                } catch (err) {
-                    showModelNotification(`Сетевая ошибка при сохранении настройки для ${modelId}.`, 'error');
-                    console.error("Reformat setting save error:", err);
-                    target.checked = !isEnabled; // Откатываем состояние чекбокса при ошибке
                 }
             }
         });
@@ -148,11 +115,8 @@ async function loadReformatSettings() {
 
 document.addEventListener('DOMContentLoaded', function() {
     const modelsContainer = document.getElementById('models_list_container');
-    // Обработчик клика для копирования ID модели уже есть в renderModelsList,
-    // но если список моделей не рендерится динамически при загрузке,
-    // то этот обработчик нужен здесь.
-    // В текущей реализации renderModelsList вызывается после загрузки,
-    // поэтому этот блок можно убрать, но оставлю на случай, если логика изменится.
+    
+    // Обработчик клика для копирования ID модели
     if (modelsContainer) {
         modelsContainer.addEventListener('click', function(event) {
             const target = event.target;
@@ -166,6 +130,42 @@ document.addEventListener('DOMContentLoaded', function() {
                         showModelNotification('Не удалось скопировать ID модели.', 'error');
                         console.error('Clipboard copy failed: ', err);
                     });
+                }
+            }
+        });
+
+        // Добавляем обработчик для чекбоксов reformat-messages-checkbox
+        // Этот обработчик должен быть здесь, чтобы он работал для элементов,
+        // которые рендерятся Jinja2 при первой загрузке страницы,
+        // а также для тех, которые динамически добавляются renderModelsList.
+        modelsContainer.addEventListener('change', async function(event) {
+            const target = event.target;
+            if (target.classList.contains('reformat-messages-checkbox')) {
+                const modelId = target.dataset.modelId;
+                const moduleName = target.dataset.moduleName;
+                const isEnabled = target.checked;
+
+                showModelNotification(`Сохранение настройки для ${modelId}...`, 'info');
+                try {
+                    const response = await fetch(URLS.ui_api_set_reformat_status, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ model_id: modelId, module_name: moduleName, is_reformat_enabled: isEnabled }),
+                        credentials: 'same-origin'
+                    });
+                    const result = await response.json();
+                    if (response.ok && result.status === 'success') {
+                        showModelNotification(result.message || `Настройка для ${modelId} успешно сохранена.`, 'success');
+                    } else {
+                        showModelNotification(result.detail || `Ошибка при сохранении настройки для ${modelId}.`, 'error');
+                        target.checked = !isEnabled; // Откатываем состояние чекбокса при ошибке
+                    }
+                } catch (err) {
+                    showModelNotification(`Сетевая ошибка при сохранении настройки для ${modelId}.`, 'error');
+                    console.error("Reformat setting save error:", err);
+                    target.checked = !isEnabled; // Откатываем состояние чекбокса при ошибке
                 }
             }
         });
@@ -194,6 +194,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (response.ok && result.status === 'success') {
                     showModelNotification(result.message || 'Список моделей успешно обновлен.', 'success');
                     renderModelsList(result.models, result.error_message);
+                    // После обновления списка, снова загружаем и применяем состояния чекбоксов
+                    loadReformatSettings(); 
                 } else {
                     const detailMessage = result.detail || (result.error_message || 'Ошибка при обновлении списка моделей.');
                     showModelNotification(detailMessage, 'error');
@@ -205,10 +207,7 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
-});
 
-// Добавляем новые URLS
-Object.assign(URLS, {
-    ui_api_set_reformat_status: "{{ url_for('ui_api_set_reformat_status') }}",
-    ui_api_get_reformat_settings: "{{ url_for('ui_api_get_reformat_settings') }}"
+    // Загружаем и применяем состояния чекбоксов при загрузке страницы
+    loadReformatSettings();
 });

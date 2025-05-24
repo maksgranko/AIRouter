@@ -304,13 +304,14 @@ class OpenAICompatModule(BaseModule):
             logger.error(f"Invalid model identifier format for OpenAI Compatible module: {model_identifier}")
             yield {"error": {"message": f"Invalid model identifier format. Expected 'oai_compat_INSTANCE_NAME/model_name' or 'openai_INSTANCE_NAME/model_name', got '{model_identifier}'.", "type": "invalid_request_error"}}
             return
-
+        
         payload_to_send = dict(request)
         payload_to_send["model"] = actual_model_name
 
         # Проверяем настройку reformat_messages
         reformat_settings = get_reformat_settings()
-        module_reformat_settings = reformat_settings.get(self.get_name(), {})
+        print(self.get_name() + " " + instance_name)
+        module_reformat_settings = reformat_settings.get(instance_name, {})
         
         # model_id в настройках хранится как "module_name/model_id", но здесь model_id уже без префикса модуля
         # Поэтому нужно использовать model_identifier, который включает префикс модуля
@@ -322,11 +323,12 @@ class OpenAICompatModule(BaseModule):
         # В admin_router.py set_reformat_setting принимает model_id и module_name.
         # model_id в admin_router.py будет "instance/model" (без OAIC), а module_name будет "OAIC".
         # Поэтому здесь нужно проверять по actual_model_name и self.get_name().
+        # Какого хуя оно здесь?
         
-        if module_reformat_settings.get(actual_model_name, False):
-            logger.debug(f"Reformat messages enabled for model '{actual_model_name}' in module '{self.get_name()}'. Applying reformat_messages.")
+        if module_reformat_settings.get(model_identifier, False):
+            logger.warning(f"Reformat messages enabled for model '{actual_model_name}' in module '{self.get_name()}'. Applying reformat_messages.")
             if "messages" in payload_to_send:
-                payload_to_send["messages"] = [{"role": "user", "content": reformat_messages(payload_to_send["messages"])}]
+                payload_to_send["messages"] = [{"role": "user", "content": await #reformat_messages(payload_to_send["messages"])}] ОШИБКА ЗДЕСЬ
             else:
                 logger.warning(f"Reformat messages enabled for model '{actual_model_name}', but no 'messages' found in payload.")
 

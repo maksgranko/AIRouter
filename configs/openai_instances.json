@@ -12,5 +12,12 @@
     "api_keys": [
       "bebra"
     ]
+  },
+  {
+    "name": "dickgpt",
+    "base_url": "http://213.219.205.126:9898/v1",
+    "api_keys": [
+      "dildo"
+    ]
   }
 ]
