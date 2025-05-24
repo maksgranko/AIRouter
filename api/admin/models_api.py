@@ -1,10 +1,11 @@
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Body
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 # Импортируем модуль admin_router целиком, чтобы получить доступ к его глобальным переменным
 import admin_router 
 # Также импортируем необходимые функции напрямую, если они используются как зависимости и т.д.
-from admin_router import get_current_username 
+from admin_router import get_current_username, get_reformat_settings, set_reformat_setting, ReformatMessageSettingPayload
 
 
 router = APIRouter(
@@ -33,3 +34,32 @@ async def ui_api_refresh_models(
     except Exception as e:
         print(f"Error refreshing models cache via API: {e}")
         raise HTTPException(status_code=500, detail="Could not refresh models cache.")
+
+@router.post("/set_reformat_status", name="ui_api_set_reformat_status", status_code=status.HTTP_200_OK)
+async def ui_api_set_reformat_status(
+    payload: ReformatMessageSettingPayload,
+    username: str = Depends(get_current_username)
+):
+    try:
+        set_reformat_setting(payload.module_name, payload.model_id, payload.is_reformat_enabled)
+        return JSONResponse(content={
+            "status": "success",
+            "message": f"Reformat setting for model '{payload.model_id}' ({payload.module_name}) updated to {payload.is_reformat_enabled}."
+        })
+    except Exception as e:
+        print(f"Error setting reformat status for model {payload.model_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"Could not update reformat setting: {e}")
+
+@router.get("/get_reformat_settings", name="ui_api_get_reformat_settings", status_code=status.HTTP_200_OK)
+async def ui_api_get_reformat_settings(
+    username: str = Depends(get_current_username)
+):
+    try:
+        settings = get_reformat_settings()
+        return JSONResponse(content={
+            "status": "success",
+            "settings": settings
+        })
+    except Exception as e:
+        print(f"Error getting reformat settings: {e}")
+        raise HTTPException(status_code=500, detail=f"Could not retrieve reformat settings: {e}")

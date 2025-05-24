@@ -54,8 +54,12 @@
             <ul class="list-group">
             {% for model in models %}
                 <li class="list-group-item">
-                    <div class="d-flex w-100 justify-content-between">
+                    <div class="d-flex w-100 justify-content-between align-items-center">
                         <h5 class="mb-1 model-id clickable-model-id" data-model-id="{{ model.id }}" title="Нажмите, чтобы скопировать ID">{{ model.id }}</h5>
+                        <div class="form-check form-switch">
+                            <input class="form-check-input reformat-messages-checkbox" type="checkbox" id="reformatSwitch-{{ model.id | replace('/', '-') }}" data-model-id="{{ model.id }}" data-module-name="{{ model.owned_by | default('N/A') }}">
+                            <label class="form-check-label" for="reformatSwitch-{{ model.id | replace('/', '-') }}">Переформировать сообщения в одно</label>
+                        </div>
                     </div>
                     <p class="mb-1 model-owner">Владелец: {{ model.owned_by | default('N/A') }}</p>
                     {# Можно добавить другую информацию о модели, если она доступна #}
@@ -76,9 +80,11 @@
     </div>
 
     <script>
-        // Определяем URLS глобально для этого скрипта, если он нужен
+        // Определяем URLS глобально для этого скрипта
         const URLS = {
-            ui_api_refresh_models: "{{ url_for('ui_api_refresh_models') }}"
+            ui_api_refresh_models: "{{ url_for('ui_api_refresh_models') }}",
+            ui_api_set_reformat_status: "{{ url_for('ui_api_set_reformat_status') }}",
+            ui_api_get_reformat_settings: "{{ url_for('ui_api_get_reformat_settings') }}"
         };
     </script>
     <script src="{{ url_for('static', path='js/admin_models.js') }}" defer></script>

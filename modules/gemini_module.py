@@ -1,6 +1,8 @@
 import httpx
 from httpx_socks import AsyncProxyTransport
-from typing import Dict, Any, Optional, AsyncGenerator
+import httpx
+from httpx_socks import AsyncProxyTransport
+from typing import Dict, Any, Optional, AsyncGenerator, List
 from .base_module import BaseModule
 from api_key_manager import ApiKeyManager
 from proxy_manager import ProxyManager, ProxyConfig
@@ -9,6 +11,11 @@ from fastapi import HTTPException
 import json
 import time
 import random
+
+# Импортируем функцию reformat_messages
+from handlers.misc.one_messager import reformat_messages
+# Импортируем функцию для получения настроек reformat_messages
+from admin_router import get_reformat_settings
 
 logger = logging.getLogger(__name__)
 
@@ -487,8 +494,28 @@ class GeminiChatModule(BaseModule):
 
         logger.debug(f"Gemini chat_completion ({chat_id}): Starting for model {model_name_for_response}. Request: {request}")
 
+        # Проверяем настройку reformat_messages
+        reformat_settings = get_reformat_settings()
+        module_reformat_settings = reformat_settings.get(self.get_name(), {})
+        
+        # model_id в настройках хранится как "module_name/model_id"
+        # Здесь model_name_for_response - это просто имя модели, например "gemini-pro"
+        # Поэтому нужно проверять по model_name_for_response и self.get_name().
+        
+        messages_to_process = request.get("messages", [])
+        if module_reformat_settings.get(model_name_for_response, False):
+            logger.warning(f"Reformat messages enabled for model '{model_name_for_response}' in module '{self.get_name()}'. Applying reformat_messages.")
+            if messages_to_process:
+                # reformat_messages ожидает список сообщений и возвращает объединенную строку
+                # Gemini API ожидает список объектов contents, каждый с role и parts
+                # Поэтому мы преобразуем объединенную строку в одно сообщение пользователя
+                reformatted_content = reformat_messages(messages_to_process)
+                messages_to_process = [{"role": "user", "content": reformatted_content}]
+            else:
+                logger.warning(f"Reformat messages enabled for model '{model_name_for_response}', but no 'messages' found in payload.")
+
         gemini_contents = []
-        for msg in request.get("messages", []):
+        for msg in messages_to_process: # Используем messages_to_process после возможного реформатирования
             role = "user" if msg.get("role") == "user" else "model"
             content = msg.get("content")
             if not isinstance(content, str):

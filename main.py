@@ -22,7 +22,7 @@ import logging # Добавляем импорт logging
 
 # Настраиваем базовое логирование
 open_browser_on_save = False
-logging_type = logging.INFO
+logging_type = logging.WARNING
 
 logging.basicConfig(level=logging_type, format='%(levelname)s:%(name)s:%(asctime)s:%(message)s') # Изменено на DEBUG и добавлен asctime
 logger = logging.getLogger(__name__) # Создаем логгер для main.py
@@ -36,6 +36,11 @@ uvicorn_error_logger.setLevel(logging_type)
 # И для модуля gemini, на всякий случай
 gemini_module_logger = logging.getLogger("modules.gemini_module")
 gemini_module_logger.setLevel(logging_type)
+oaic_module_logger = logging.getLogger("modules.openai_compat_module")
+oaic_module_logger.setLevel(logging_type)
+
+output_oaic_module_logger = logging.getLogger("api.airouter.openai_compatible")
+output_oaic_module_logger.setLevel(logging_type)
 
 
 # Загружаем переменные окружения из .env файла (если он есть)
@@ -44,7 +49,7 @@ gemini_module_logger.setLevel(logging_type)
 load_dotenv() 
 
 # app и registry создаются один раз здесь
-APP_VERSION = "1.1.0a" # Версия приложения
+APP_VERSION = "1.1.2a" # Версия приложения
 app = FastAPI()
 
 # Монтирование статических файлов

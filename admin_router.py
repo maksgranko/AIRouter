@@ -42,6 +42,55 @@ class NewProxyPayload(BaseModel):
 class ExistingProxyPayload(BaseModel):
     url: str
 
+# Pydantic модель для настройки reformat_messages
+class ReformatMessageSettingPayload(BaseModel):
+    model_id: str
+    module_name: str
+    is_reformat_enabled: bool
+
+# Путь к файлу настроек
+SETTINGS_FILE_PATH = "configs/settings.json"
+
+def _load_settings() -> Dict[str, Any]:
+    """Загружает все настройки из файла settings.json."""
+    if not os.path.exists(SETTINGS_FILE_PATH):
+        return {}
+    try:
+        with open(SETTINGS_FILE_PATH, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except json.JSONDecodeError as e:
+        print(f"Error decoding settings.json: {e}")
+        return {}
+    except Exception as e:
+        print(f"Error loading settings.json: {e}")
+        return {}
+
+def _save_settings(settings_data: Dict[str, Any]):
+    """Сохраняет все настройки в файл settings.json."""
+    try:
+        with open(SETTINGS_FILE_PATH, 'w', encoding='utf-8') as f:
+            json.dump(settings_data, f, indent=2, ensure_ascii=False)
+    except Exception as e:
+        print(f"Error saving settings.json: {e}")
+
+def get_reformat_settings() -> Dict[str, Dict[str, bool]]:
+    """Получает настройки reformat_messages для всех моделей."""
+    settings = _load_settings()
+    return settings.get("reformat_messages_settings", {})
+
+def set_reformat_setting(module_name: str, model_id: str, is_enabled: bool):
+    """Устанавливает или обновляет настройку reformat_messages для конкретной модели."""
+    settings = _load_settings()
+    if "reformat_messages_settings" not in settings:
+        settings["reformat_messages_settings"] = {}
+    
+    if module_name not in settings["reformat_messages_settings"]:
+        settings["reformat_messages_settings"][module_name] = {}
+    
+    settings["reformat_messages_settings"][module_name][model_id] = is_enabled
+    _save_settings(settings)
+
+
 async def get_current_username(credentials: HTTPBasicCredentials = Depends(security)): # Используем экземпляр security
     ADMIN_USERNAME_ENV = os.getenv("ADMIN_USERNAME", "admin") 
     ADMIN_PASSWORD_ENV = os.getenv("ADMIN_PASSWORD", "supersecret")
@@ -69,7 +118,7 @@ async def get_dashboard_data(request: Request) -> Dict[str, Any]:
     proxy_manager = request.app.state.proxy_manager
     module_registry = request.app.state.module_registry
     airouter_key_manager = request.app.state.airouter_key_manager
-    settings_file_path = request.app.state.settings_file_path
+    # settings_file_path = request.app.state.settings_file_path # Теперь используем глобальную переменную
 
     proxy_status_text = "Включено" if proxy_manager.active else "Выключено"
     
@@ -80,10 +129,9 @@ async def get_dashboard_data(request: Request) -> Dict[str, Any]:
     require_airouter_api_key = False
     force_proxy_rotation_after_request = False
     try:
-        with open(settings_file_path, 'r') as f:
-            settings_data = json.load(f)
-            require_airouter_api_key = settings_data.get("require_airouter_api_key", False)
-            force_proxy_rotation_after_request = settings_data.get("proxy_settings", {}).get("force_proxy_rotation_after_request", False)
+        settings_data = _load_settings() # Используем новую функцию
+        require_airouter_api_key = settings_data.get("require_airouter_api_key", False)
+        force_proxy_rotation_after_request = settings_data.get("proxy_settings", {}).get("force_proxy_rotation_after_request", False)
     except Exception as e:
         print(f"Error reading settings for dashboard data: {e}") 
 

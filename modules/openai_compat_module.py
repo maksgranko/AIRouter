@@ -1,18 +1,22 @@
+import datetime
 import httpx
 from httpx_socks import AsyncProxyTransport
-from typing import Dict, Any, Optional, AsyncGenerator
+from typing import Dict, Any, Optional, AsyncGenerator, List
+
 from .base_module import BaseModule
 from api_key_manager import ApiKeyManager
 from proxy_manager import ProxyManager, ProxyConfig
 import logging
 from fastapi import HTTPException
 import json
-import time
-import random
+
+# Импортируем функцию reformat_messages
+from handlers.misc.one_messager import reformat_messages
+# Импортируем функцию для получения настроек reformat_messages
+from admin_router import get_reformat_settings
 
 logger = logging.getLogger(__name__)
 
-from typing import List
 class OpenAICompatModule(BaseModule):
 
     @staticmethod
@@ -206,8 +210,6 @@ class OpenAICompatModule(BaseModule):
             yield {"error": {"message": f"No API keys for instance '{instance_name}'.", "type": "server_error", "code": "no_api_keys"}}
             return
 
-        key_exhausted_message = f"All API keys for instance {instance_name} are exhausted or failed for streaming."
-
         current_proxy_config = None
         httpx_proxies = None
         if self.proxy_manager.active:
@@ -278,6 +280,7 @@ class OpenAICompatModule(BaseModule):
                             if data_content == "[DONE]":
                                 logger.debug(f"Stream for instance '{instance_name}' ended with [DONE].")
                                 break
+                            logger.debug(f"Received stream message for instance '{instance_name}': {data_content}")
                             try:
                                 chunk_obj = json.loads(data_content)
                                 yield chunk_obj
@@ -302,9 +305,35 @@ class OpenAICompatModule(BaseModule):
             logger.error(f"Invalid model identifier format for OpenAI Compatible module: {model_identifier}")
             yield {"error": {"message": f"Invalid model identifier format. Expected 'oai_compat_INSTANCE_NAME/model_name' or 'openai_INSTANCE_NAME/model_name', got '{model_identifier}'.", "type": "invalid_request_error"}}
             return
-
+        
         payload_to_send = dict(request)
         payload_to_send["model"] = actual_model_name
+
+        # Проверяем настройку reformat_messages
+        reformat_settings = get_reformat_settings()
+        print(self.get_name() + " " + instance_name)
+        module_reformat_settings = reformat_settings.get(instance_name, {})
+        
+        # model_id в настройках хранится как "module_name/model_id", но здесь model_id уже без префикса модуля
+        # Поэтому нужно использовать model_identifier, который включает префикс модуля
+        # Или же, если model.id в admin_models.html уже содержит префикс, то model_id будет "OAIC/instance/model"
+        # В данном случае model_identifier уже имеет формат "OAIC/instance/model",
+        # а actual_model_name - это "instance/model".
+        # Нам нужно проверить настройку для полного model_identifier, который приходит в запросе.
+        # Или же, если model.id в admin_models.html уже содержит префикс, то model_id будет "OAIC/instance/model"
+        # В admin_router.py set_reformat_setting принимает model_id и module_name.
+        # model_id в admin_router.py будет "instance/model" (без OAIC), а module_name будет "OAIC".
+        # Поэтому здесь нужно проверять по actual_model_name и self.get_name().
+        
+        if module_reformat_settings.get(model_identifier, False):
+            logger.warning(f"Reformat messages enabled for model '{actual_model_name}' in module '{self.get_name()}'. Applying reformat_messages.")
+            if "messages" in payload_to_send:
+                messages_json_string = json.dumps(payload_to_send, ensure_ascii=False)
+                reformatted_json_string = await reformat_messages(messages_json_string)
+                reformatted_data = json.loads(reformatted_json_string)
+                payload_to_send["messages"] = reformatted_data.get("messages", [])
+            else:
+                logger.warning(f"Reformat messages enabled for model '{actual_model_name}', but no 'messages' found in payload.")
 
         logger.debug(f"OpenAI Compatible chat_completion for instance '{instance_name}', model '{actual_model_name}'. Request: {payload_to_send}")
 
