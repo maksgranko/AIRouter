@@ -35,7 +35,8 @@
       "OAIC/dickgpt/claude-3-haiku": true,
       "OAIC/dickgpt/claude-3-sonnet": true,
       "OAIC/dickgpt/claude-3-opus": true,
-      "OAIC/dickgpt/claude-3.7-sonnet-thinking": true
+      "OAIC/dickgpt/claude-3.7-sonnet-thinking": true,
+      "OAIC/dickgpt/claude-3-5-sonnet": true
     }
   }
 }

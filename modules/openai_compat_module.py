@@ -323,12 +323,19 @@ class OpenAICompatModule(BaseModule):
         # В admin_router.py set_reformat_setting принимает model_id и module_name.
         # model_id в admin_router.py будет "instance/model" (без OAIC), а module_name будет "OAIC".
         # Поэтому здесь нужно проверять по actual_model_name и self.get_name().
-        # Какого хуя оно здесь?
         
         if module_reformat_settings.get(model_identifier, False):
             logger.warning(f"Reformat messages enabled for model '{actual_model_name}' in module '{self.get_name()}'. Applying reformat_messages.")
             if "messages" in payload_to_send:
-                payload_to_send["messages"] = [{"role": "user", "content": await #reformat_messages(payload_to_send["messages"])}] ОШИБКА ЗДЕСЬ
+                # Преобразуем список сообщений в JSON строку, обернув его в словарь с ключом "messages"
+                messages_json_string = json.dumps(payload_to_send, ensure_ascii=False)
+                reformatted_json_string = await reformat_messages(messages_json_string)
+                # f = open("bebra.txt","w")
+                # f.write(reformatted_json_string) 
+                # f.close()
+                # Парсим обратно JSON строку, чтобы получить обновленный список сообщений
+                reformatted_data = json.loads(reformatted_json_string)
+                payload_to_send["messages"] = reformatted_data.get("messages", [])
             else:
                 logger.warning(f"Reformat messages enabled for model '{actual_model_name}', but no 'messages' found in payload.")
 
