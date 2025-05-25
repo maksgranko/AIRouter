@@ -159,6 +159,7 @@ class UpdateOpenAIInstanceCustomTokenizerPayload(BaseModel):
 class OpenAIInstanceMetaUpdatePayload(BaseModel):
     name: str = None
     base_url: str = None
+    failsafe_providers: List[str] = None
 
 class OpenAIInstancePayload(BaseModel):
     name: str
@@ -307,6 +308,9 @@ async def ui_api_patch_openai_instance_meta(
     if payload.base_url is not None:
         instances[idx]['base_url'] = payload.base_url
         updated_fields['base_url'] = payload.base_url
+    if payload.failsafe_providers is not None:
+        instances[idx]['failsafe_providers'] = payload.failsafe_providers
+        updated_fields['failsafe_providers'] = payload.failsafe_providers
 
     _save_openai_instances(instances)
     # чтобы не потерялись ключи и остальные поля, reload

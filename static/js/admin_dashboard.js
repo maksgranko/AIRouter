@@ -370,6 +370,37 @@ async function loadDashboardData() {
                 keysHtml += '</ul>';
 
                 const useGlobalProxyChecked = instance.use_global_proxy !== false ? 'checked' : '';
+
+                // === Failsafe ComboBox+list ===
+                const allInstanceNames = data.openai_instances.map(i => i.name);
+                const failsafeList = instance.failsafe_providers || [];
+                // Доступные для добавления: не self и не уже добавленные
+                const availableFailsafe = allInstanceNames.filter(n => n !== instance.name && !failsafeList.includes(n));
+
+                let failsafeHtml = `
+                  <label class="form-label">Failsafe-провайдеры (по порядку):</label>
+                  <ul class="list-group list-group-sm mb-2 openai-failsafe-list" id="failsafe_list_${instance.name}">
+                    ${
+                      failsafeList.length
+                        ? failsafeList.map((prov, i) =>
+                            `<li class="list-group-item d-flex justify-content-between align-items-center py-1 openai-failsafe-draggable" draggable="true" data-prov="${prov}">
+                               <span>${prov}</span>
+                               <button type="button" class="btn btn-outline-danger btn-sm px-2 py-0 openai-failsafe-remove-btn" data-instance-name="${instance.name}" data-prov="${prov}" title="Удалить">&times;</button>
+                             </li>`
+                          ).join('')
+                        : `<li class="list-group-item text-muted py-1">Нет резервных провайдеров</li>`
+                    }
+                  </ul>
+                  <div class="input-group input-group-sm mb-1">
+                    <select class="form-select openai-failsafe-combo" id="failsafe_combo_${instance.name}" data-instance-name="${instance.name}">
+                      <option value="" disabled selected>Выберите провайдера</option>
+                      ${availableFailsafe.map(pv => `<option value="${pv}">${pv}</option>`).join('')}
+                    </select>
+                    <button type="button" class="btn btn-primary openai-failsafe-add-btn" data-instance-name="${instance.name}">Добавить</button>
+                  </div>
+                  <small class="form-text text-muted">Если этот инстанс выдаёт ошибку — пробуем выбранных выше по порядку.</small>
+                `;
+
                 instanceDiv.innerHTML = `
                     <div class="card-header d-flex justify-content-between align-items-center">
                         <div class="d-flex align-items-center">
@@ -430,6 +461,10 @@ async function loadDashboardData() {
                                 <button type="submit" class="btn btn-primary btn-sm">Добавить ключ</button>
                             </div>
                         </form>
+
+                        <div class="mt-3 mb-1">
+                          ${failsafeHtml}
+                        </div>
                     </div>
                 `;
                 instancesSection.appendChild(instanceDiv);
@@ -460,7 +495,25 @@ async function loadDashboardData() {
                             } else {
                                 input.replaceWith(displayKeySpan);
                             }
-                        });
+                // attach failsafe (add/remove) handlers after dom insert
+                // REMOVE handler as ранее — останется на каждом блоке
+                instanceDiv.querySelectorAll('.openai-failsafe-remove-btn').forEach(btn => {
+                  btn.addEventListener('click', async function() {
+                    const provToRemove = btn.dataset.prov;
+                    const instName = btn.dataset.instanceName;
+                    const newFailsafe = failsafeList.filter(p => p !== provToRemove);
+                    try {
+                      const url = `/api/admin/ui/settings/openai-instances/${encodeURIComponent(instName)}/meta`;
+                      const res = await makeApiRequest(url, 'PATCH', { failsafe_providers: newFailsafe });
+                      window.showNotification('notification_area', res.message || 'Failsafe-провайдер удалён');
+                      loadDashboardData();
+                    } catch (e) {}
+                  });
+                });
+                // ADD handler — через делегирование
+                // Удаляем addEventListener и setTimeout на каждую кнопку, вместо этого — один общий делегат ниже
+
+            });
                         input.addEventListener('keydown', function (e) {
                             if (e.key === 'Enter') input.blur();
                             if (e.key === 'Escape') { input.replaceWith(displayKeySpan); }
@@ -807,6 +860,109 @@ function attachFormHandlers() {
                 loadDashboardData();
             } catch (e) { /* ошибка уже показана */ }
         }
+    });
+
+    // Делегирование для кнопки добавления/удаления и drag&drop failsafe-провайдера
+    const instancesSection = document.getElementById('openai_instances_management_section');
+    instancesSection.addEventListener('click', async function(event) {
+      // ADD handler
+      if (event.target.classList.contains('openai-failsafe-add-btn')) {
+        const addBtn = event.target;
+        const instName = addBtn.dataset.instanceName;
+        const instanceCard = addBtn.closest('.card');
+        // Получаем select в пределах текущей карточки
+        const combo = instanceCard.querySelector('.openai-failsafe-combo');
+        const val = combo && combo.value ? combo.value : null;
+        if (!val) {
+          window.showNotification && window.showNotification('notification_area', 'Выберите резервного провайдера для добавления.', 'error');
+          return;
+        }
+        // Собираем текущий список из DOM
+        const failsListUl = instanceCard.querySelector('.openai-failsafe-list');
+        const liElements = failsListUl ? Array.from(failsListUl.querySelectorAll('li')) : [];
+        let currentList = liElements.map(li => li.querySelector('.openai-failsafe-remove-btn')?.dataset.prov).filter(Boolean);
+        if (currentList.includes(val)) return;
+        currentList = currentList.concat([val]);
+        try {
+          const url = `/api/admin/ui/settings/openai-instances/${encodeURIComponent(instName)}/meta`;
+          const res = await makeApiRequest(url, 'PATCH', { failsafe_providers: currentList });
+          window.showNotification('notification_area', res.message || 'Failsafe-провайдер добавлен');
+          combo.selectedIndex = 0;
+          loadDashboardData();
+        } catch (e) {}
+      }
+      // REMOVE handler
+      if (event.target.classList.contains('openai-failsafe-remove-btn')) {
+        const removeBtn = event.target;
+        const instName = removeBtn.dataset.instanceName;
+        const provToRemove = removeBtn.dataset.prov;
+        const instanceCard = removeBtn.closest('.card');
+        // Собрать оставшиеся кроме удаляемого
+        const failsListUl = instanceCard.querySelector('.openai-failsafe-list');
+        const liElements = failsListUl ? Array.from(failsListUl.querySelectorAll('li')) : [];
+        let currentList = liElements
+          .map(li => li.querySelector('.openai-failsafe-remove-btn')?.dataset.prov)
+          .filter(p => p && p !== provToRemove);
+        try {
+          const url = `/api/admin/ui/settings/openai-instances/${encodeURIComponent(instName)}/meta`;
+          const res = await makeApiRequest(url, 'PATCH', { failsafe_providers: currentList });
+          window.showNotification('notification_area', res.message || 'Failsafe-провайдер удалён');
+          loadDashboardData();
+        } catch (e) {}
+      }
+    });
+
+
+    // Drag & drop для failsafe-провайдеров
+    let dragSrcEl = null;
+    instancesSection.addEventListener('dragstart', function(event) {
+      const li = event.target.closest('.openai-failsafe-draggable');
+      if (!li) return;
+      dragSrcEl = li;
+      event.dataTransfer.effectAllowed = 'move';
+      event.dataTransfer.setData('text/plain', li.dataset.prov);
+      setTimeout(() => li.classList.add('dragging'), 0);
+    });
+
+    instancesSection.addEventListener('dragover', function(event) {
+      const li = event.target.closest('.openai-failsafe-draggable');
+      if (!li) return;
+      event.preventDefault();
+      li.classList.add('dragover');
+    });
+
+    instancesSection.addEventListener('dragleave', function(event) {
+      const li = event.target.closest('.openai-failsafe-draggable');
+      if (li) li.classList.remove('dragover');
+    });
+
+    instancesSection.addEventListener('drop', async function(event) {
+      const li = event.target.closest('.openai-failsafe-draggable');
+      if (!li || !dragSrcEl || li === dragSrcEl) return;
+      event.preventDefault();
+      li.classList.remove('dragover');
+      // Перемещаем элемент
+      const ul = li.parentNode;
+      ul.insertBefore(dragSrcEl, li.nextSibling === dragSrcEl ? li : li.nextSibling);
+      // Собираем новый порядок
+      const provs = Array.from(ul.querySelectorAll('.openai-failsafe-draggable')).map(node => node.dataset.prov);
+      // Получаем инстанс
+      const instanceCard = ul.closest('.card');
+      const instName = instanceCard.querySelector('.openai-failsafe-add-btn').dataset.instanceName;
+      try {
+        const url = `/api/admin/ui/settings/openai-instances/${encodeURIComponent(instName)}/meta`;
+        const res = await makeApiRequest(url, 'PATCH', { failsafe_providers: provs });
+        window.showNotification('notification_area', res.message || 'Порядок failsafe-провайдеров обновлён');
+        loadDashboardData();
+      } catch (e) {}
+    });
+
+    instancesSection.addEventListener('dragend', function(event) {
+      const li = event.target.closest('.openai-failsafe-draggable');
+      if (li) li.classList.remove('dragging');
+      dragSrcEl = null;
+      // после drop/even if not dropped - снимаем выделение со всех
+      instancesSection.querySelectorAll('.openai-failsafe-draggable').forEach(el => el.classList.remove('dragover'));
     });
 
     handlersAttached = true;

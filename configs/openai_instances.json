@@ -7,7 +7,8 @@
     ],
     "use_global_proxy": true,
     "use_custom_tokenizer": false,
-    "enabled": false
+    "enabled": false,
+    "failsafe_providers": []
   },
   {
     "name": "dickgpt",
@@ -18,5 +19,23 @@
     "use_global_proxy": true,
     "use_custom_tokenizer": true,
     "enabled": true
+  },
+  {
+    "name": "32\u043a\u043a2332\u04303\u0430",
+    "base_url": "https://api.example.com/v1",
+    "api_keys": [
+      "asdasdasd"
+    ],
+    "enabled": true,
+    "use_global_proxy": true
+  },
+  {
+    "name": "https://api.example.com/v1",
+    "base_url": "https://api.example.com/v1",
+    "api_keys": [
+      "https://api.example.com/v1"
+    ],
+    "enabled": true,
+    "use_global_proxy": true
   }
 ]

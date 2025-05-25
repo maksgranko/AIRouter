@@ -432,49 +432,66 @@ class OpenAICompatModule(BaseModule):
         payload_to_send = dict(request)
         payload_to_send["model"] = actual_model_name
 
-        result = await self._execute_non_streaming_with_rotation(instance_name, "POST", "/completions", payload_to_send)
-        instance_config = self._get_instance_config(instance_name)
-        # Если пересчёт активен, пересчитать usage вручную
-        if instance_config and instance_config.get("use_custom_tokenizer"):
+        # Failsafe-провайдеры кастомно из инстанса, либо общий enabled-список по старому стилю
+        instance_conf = self._get_instance_config(instance_name)
+        failsafe_chain = [instance_name]
+        if instance_conf and instance_conf.get("failsafe_providers"):
+            # Только объявленные owner и его failsafe-провайдеры по порядку, без циклов; если пусто — только owner
+            for prov in instance_conf["failsafe_providers"]:
+                if prov not in failsafe_chain:
+                    failsafe_chain.append(prov)
+        else:
+            # старое поведение: обход по enabled
+            enabled_instances = [inst["name"] for inst in self.instances_config if inst.get("enabled", True)]
+            if instance_name not in enabled_instances:
+                enabled_instances.insert(0, instance_name)
+            failsafe_chain = enabled_instances
+
+        last_exc = None
+        for current_instance in failsafe_chain:
             try:
-                raw_prompt = ""
-                # Для chat/completions это "messages", для completions это "prompt"
-                if "messages" in payload_to_send:
-                    # Склеить все сообщения (role+content) для чат-режима
-                    raw_prompt = "\n".join(
-                        [msg.get("content", "") for msg in payload_to_send["messages"]]
-                    )
-                elif "prompt" in payload_to_send:
-                    if isinstance(payload_to_send["prompt"], list):
-                        raw_prompt = "\n".join(payload_to_send["prompt"])
-                    else:
-                        raw_prompt = str(payload_to_send["prompt"])
-                # Извлечь текст ответа модели
-                completion_text = ""
-                if "choices" in result and result["choices"]:
-                    # Сначала смотрим message.content, fallback к text
-                    message = result["choices"][0]
-                    # Для chat: {"message": {"content": ...}}
-                    if "message" in message and isinstance(message["message"], dict) and "content" in message["message"]:
-                        completion_text = message["message"]["content"]
-                    elif "text" in message:
-                        completion_text = message["text"]
+                result = await self._execute_non_streaming_with_rotation(current_instance, "POST", "/completions", payload_to_send)
+                # Успех — считаем usage если нужно и возвращаем
+                instance_config = self._get_instance_config(current_instance)
+                if instance_config and instance_config.get("use_custom_tokenizer"):
+                    try:
+                        raw_prompt = ""
+                        # Для chat/completions это "messages", для completions "prompt"
+                        if "messages" in payload_to_send:
+                            raw_prompt = "\n".join(
+                                [msg.get("content", "") for msg in payload_to_send["messages"]]
+                            )
+                        elif "prompt" in payload_to_send:
+                            if isinstance(payload_to_send["prompt"], list):
+                                raw_prompt = "\n".join(payload_to_send["prompt"])
+                            else:
+                                raw_prompt = str(payload_to_send["prompt"])
+                        completion_text = ""
+                        if "choices" in result and result["choices"]:
+                            message = result["choices"][0]
+                            if "message" in message and isinstance(message["message"], dict) and "content" in message["message"]:
+                                completion_text = message["message"]["content"]
+                            elif "text" in message:
+                                completion_text = message["text"]
 
-                prompt_tokens = get_token_count(raw_prompt, actual_model_name)
-                completion_tokens = get_token_count(completion_text, actual_model_name)
-                # Можно доработать prompt_tokens_details, если требуется кэш
-                usage_custom = {
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": completion_tokens,
-                    "total_tokens": prompt_tokens + completion_tokens,
-                    "prompt_tokens_details": {"cached_tokens": 0}
-                }
-                result["usage"] = usage_custom
-            except Exception as err:
-                logger.exception(f"Ошибка пересчёта usage кастомным токенайзером: {err}")
-                # Не перезаписываем usage при сбое
+                        prompt_tokens = get_token_count(raw_prompt, actual_model_name)
+                        completion_tokens = get_token_count(completion_text, actual_model_name)
+                        usage_custom = {
+                            "prompt_tokens": prompt_tokens,
+                            "completion_tokens": completion_tokens,
+                            "total_tokens": prompt_tokens + completion_tokens,
+                            "prompt_tokens_details": {"cached_tokens": 0}
+                        }
+                        result["usage"] = usage_custom
+                    except Exception as err:
+                        logger.exception(f"Ошибка пересчёта usage кастомным токенайзером: {err}")
+                return result
+            except Exception as exc:
+                last_exc = exc
+                logger.warning(f"Failsafe: instance '{current_instance}' не ответил (reason: {exc}). Перехожу к следующему инстансу.")
 
-        return result
+        # Ни один из цепочки не сработал – финальный фейл
+        raise HTTPException(status_code=503, detail=f"Все указанные провайдеры (failsafe chain) недоступны для completion: {str(last_exc)}. Возможно, стоит попробовать ещё раз.")
 
     async def embeddings(self, request: Dict[str, Any]) -> Dict[str, Any]:
         model_identifier = request.get("model", "")
@@ -607,5 +624,7 @@ class OpenAICompatModule(BaseModule):
             logger.error(f"HTTPStatusError during audio translation for instance {instance_name}: {e.response.text}")
             raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
         except Exception as e:
+            logger.error(f"Error during audio translation for instance {instance_name}: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Audio translation failed: {str(e)}")
             logger.error(f"Error during audio translation for instance {instance_name}: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Audio translation failed: {str(e)}")
