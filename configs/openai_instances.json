@@ -5,7 +5,8 @@
     "api_keys": [
       "bebra"
     ],
-    "use_global_proxy": true
+    "use_global_proxy": true,
+    "enabled": false
   },
   {
     "name": "dickgpt",
@@ -13,6 +14,7 @@
     "api_keys": [
       "dildo"
     ],
-    "use_global_proxy": true
+    "use_global_proxy": true,
+    "enabled": true
   }
 ]

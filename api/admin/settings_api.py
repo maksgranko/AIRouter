@@ -169,9 +169,42 @@ class UpdateOpenAIInstanceKeyPayload(BaseModel):
 class UpdateServiceKeyPayload(BaseModel):
     old_api_key: str
     new_api_key: str
-
 class OpenAIInstanceKeyPayload(BaseModel):
     api_key: str
+
+class UpdateOpenAIInstanceEnabledPayload(BaseModel):
+    enabled: bool
+
+@router.patch("/openai-instances/{instance_name}/enabled", name="ui_api_patch_openai_instance_enabled")
+async def ui_api_patch_openai_instance_enabled(
+    instance_name: str,
+    payload: UpdateOpenAIInstanceEnabledPayload,
+    request: Request,
+    username: str = Depends(get_current_username)
+):
+    """
+    Обновляет статус enabled для указанного инстанса.
+    """
+    instances = _load_openai_instances()
+    found = False
+    for instance in instances:
+        if instance["name"] == instance_name:
+            instance["enabled"] = payload.enabled
+            found = True
+            break
+    if not found:
+        raise HTTPException(status_code=404, detail=f"Instance '{instance_name}' not found.")
+
+    _save_openai_instances(instances)
+    module_registry = request.app.state.module_registry
+    if hasattr(module_registry, "reload_module_config"):
+        await module_registry.reload_module_config("OAIC", new_config=instances)
+    return JSONResponse(
+        content={
+            "status": "success",
+            "message": f"Instance '{instance_name}' set to enabled={payload.enabled}."
+        }
+    )
 
 
 @router.get("/openai-instances", name="ui_api_get_openai_instances")

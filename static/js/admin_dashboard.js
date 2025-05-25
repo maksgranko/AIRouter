@@ -385,7 +385,16 @@ async function loadDashboardData() {
                 const useGlobalProxyChecked = instance.use_global_proxy !== false ? 'checked' : '';
                 instanceDiv.innerHTML = `
                     <div class="card-header d-flex justify-content-between align-items-center">
-                        <div>
+                        <div class="d-flex align-items-center">
+                            <button type="button" class="btn btn-sm me-2 openai-instance-enabled-toggle-btn"
+                                data-instance-name="${instance.name}"
+                                data-enabled="${instance.enabled}"
+                                title="${instance.enabled ? 'Выключить инстанс' : 'Включить инстанс'}"
+                                style="background-color: ${instance.enabled ? '#198754' : '#adb5bd'}; color: #fff;">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" class="bi bi-power" viewBox="0 0 16 16">
+                                  <path d="M7.5 1v7h1V1h-1zm.36 10.15a4.5 4.5 0 1 1 1.27 0l.48.87a5.5 5.5 0 1 0-2.23 0l.48-.87zm1.27-1.25a3.5 3.5 0 1 0-2.23 0l.48.87a4.5 4.5 0 1 1 1.27 0l.48-.87z"/>
+                                </svg>
+                            </button>
                             <h5 class="mb-0 d-inline-block editable-instance-name" style="cursor:pointer;" data-instance-name="${instance.name}">
                                 <span class="display-instance-name">${instance.name}</span>
                                 <span class="edit-instance-name-btn" title="Редактировать название" style="color: #888; cursor: pointer;">
@@ -726,7 +735,23 @@ function attachFormHandlers() {
 
     document.getElementById('openai_instances_management_section').addEventListener('click', async function(event) {
         const target = event.target;
-        const instanceName = target.dataset.instanceName;
+        const instanceName = target.dataset.instanceName || target.closest('.openai-instance-enabled-toggle-btn')?.dataset.instanceName;
+
+        // Вкл/выкл инстанс
+        if (target.classList.contains('openai-instance-enabled-toggle-btn') ||
+            target.closest('.openai-instance-enabled-toggle-btn')) {
+            const btn = target.classList.contains('openai-instance-enabled-toggle-btn')
+                ? target
+                : target.closest('.openai-instance-enabled-toggle-btn');
+            const enabledNow = btn.dataset.enabled === 'true';
+            try {
+                const url = `/api/admin/ui/settings/openai-instances/${encodeURIComponent(instanceName)}/enabled`;
+                const result = await makeApiRequest(url, 'PATCH', { enabled: !enabledNow });
+                showNotification(result.message || (!enabledNow ? 'Инстанс включён.' : 'Инстанс отключён.'));
+                loadDashboardData();
+            } catch (e) { /* ошибка уже показана */ }
+            return;
+        }
 
         // Удаление инстанса
         if (target.classList.contains('openai-instance-remove-btn')) {

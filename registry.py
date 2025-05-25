@@ -105,3 +105,15 @@ class ModuleRegistry:
     def all(self) -> List[BaseModule]:
         logger.warning("ModuleRegistry.all() is deprecated. Use all_active_modules() or all_registered_modules(). Falling back to all_active_modules().")
         return self.all_active_modules()
+
+    async def reload_module_config(self, module_name: str, new_config: list):
+        """
+        Делегирует перезагрузку конфига модулю (например, OAIC).
+        """
+        if module_name not in self._modules:
+            raise KeyError(f"Модуль '{module_name}' не зарегистрирован.")
+        module_obj = self._modules[module_name]
+        if hasattr(module_obj, "reload_module_config"):
+            module_obj.reload_module_config(new_config)
+        else:
+            raise AttributeError(f"Модуль '{module_name}' не поддерживает reload_module_config")
