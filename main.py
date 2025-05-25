@@ -49,7 +49,7 @@ output_oaic_module_logger.setLevel(logging_type)
 load_dotenv() 
 
 # app и registry создаются один раз здесь
-APP_VERSION = "1.1.2a" # Версия приложения
+APP_VERSION = "1.2.0" # Версия приложения
 app = FastAPI()
 
 # Монтирование статических файлов

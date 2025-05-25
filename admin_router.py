@@ -124,7 +124,6 @@ async def get_dashboard_data(request: Request) -> Dict[str, Any]:
     proxy_manager = request.app.state.proxy_manager
     module_registry = request.app.state.module_registry
     airouter_key_manager = request.app.state.airouter_key_manager
-    # settings_file_path = request.app.state.settings_file_path # Теперь используем глобальную переменную
 
     proxy_status_text = "Включено" if proxy_manager.active else "Выключено"
     
@@ -135,7 +134,7 @@ async def get_dashboard_data(request: Request) -> Dict[str, Any]:
     require_airouter_api_key = False
     force_proxy_rotation_after_request = False
     try:
-        settings_data = _load_settings() # Используем новую функцию
+        settings_data = _load_settings()
         require_airouter_api_key = settings_data.get("require_airouter_api_key", False)
         force_proxy_rotation_after_request = settings_data.get("proxy_settings", {}).get("force_proxy_rotation_after_request", False)
         module_proxy_usage = settings_data.get("module_proxy_usage", {})
@@ -183,19 +182,12 @@ async def admin_dashboard_view(request: Request, username: str = Depends(get_cur
     context = {
         "request": request,
         "username": username,
-        "app_version": request.app.state.app_version 
-        # Можно передать и другие базовые вещи, если они нужны до загрузки JS,
-        # например, URL для API эндпоинта
+        "app_version": request.app.state.app_version
     }
     return templates.TemplateResponse("admin_dashboard.html", context)
 
-# --- JSON API эндпоинты были перенесены в папку /api ---
-# Старые обработчики форм удалены, так как UI теперь использует JSON API.
-
 @router.get("/help", name="admin_help")
 async def admin_help_view(request: Request, username: str = Depends(get_current_username)):
-    # Можно передать какие-либо динамические данные в справку, если нужно
-    # Например, актуальные имена файлов конфигурации
     key_manager = request.app.state.key_manager
     proxy_manager = request.app.state.proxy_manager
     context = {

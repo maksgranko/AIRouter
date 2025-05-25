@@ -150,64 +150,30 @@ def _save_openai_instances(instances: list):
     # TODO: После сохранения нужно уведомить ModuleRegistry о необходимости перезагрузки OpenAICompatModule
     # или динамически обновить его конфигурацию, если это поддерживается.
 
-class UpdateOpenAIInstanceProxyPayload(BaseModel):
-    use_global_proxy: bool
-
-class UpdateOpenAIInstanceCustomTokenizerPayload(BaseModel):
-    use_custom_tokenizer: bool = None
-
 class OpenAIInstanceMetaUpdatePayload(BaseModel):
     name: str = None
     base_url: str = None
     failsafe_providers: List[str] = None
+    use_global_proxy: bool = None
+    use_custom_tokenizer: bool = None
+class OpenAIInstanceKeyPayload(BaseModel):
+    api_key: str
 
+class UpdateOpenAIInstanceKeyPayload(BaseModel):
+    old_api_key: str
+    new_api_key: str
 class OpenAIInstancePayload(BaseModel):
     name: str
     base_url: str
     api_keys: List[str]
 
-class UpdateOpenAIInstanceKeyPayload(BaseModel):
-    old_api_key: str
-    new_api_key: str
 
 class UpdateServiceKeyPayload(BaseModel):
     old_api_key: str
     new_api_key: str
-class OpenAIInstanceKeyPayload(BaseModel):
-    api_key: str
-
 class UpdateOpenAIInstanceEnabledPayload(BaseModel):
     enabled: bool
 
-@router.put("/openai-instances/{instance_name}/custom-tokenizer", name="ui_api_update_openai_instance_custom_tokenizer")
-async def ui_api_update_openai_instance_custom_tokenizer(
-    instance_name: str,
-    payload: UpdateOpenAIInstanceCustomTokenizerPayload,
-    request: Request,
-    username: str = Depends(get_current_username)
-):
-    """
-    Обновляет поле use_custom_tokenizer у конкретного OpenAI-compatible инстанса.
-    """
-    instances = _load_openai_instances()
-    found = False
-    for instance in instances:
-        if instance["name"] == instance_name:
-            instance["use_custom_tokenizer"] = payload.use_custom_tokenizer
-            found = True
-            break
-    if not found:
-        raise HTTPException(status_code=404, detail=f"Instance '{instance_name}' not found.")
-
-    _save_openai_instances(instances)
-    # Чтобы настройки применились без перезагрузки:
-    module_registry = request.app.state.module_registry
-    if hasattr(module_registry, 'reload_module_config'):
-        await module_registry.reload_module_config("OAIC", new_config=instances)
-    return JSONResponse(content={
-        "status": "success",
-        "message": f"use_custom_tokenizer for instance '{instance_name}' set to {payload.use_custom_tokenizer}."
-    })
 
 @router.patch("/openai-instances/{instance_name}/enabled", name="ui_api_patch_openai_instance_enabled")
 async def ui_api_patch_openai_instance_enabled(
@@ -311,6 +277,12 @@ async def ui_api_patch_openai_instance_meta(
     if payload.failsafe_providers is not None:
         instances[idx]['failsafe_providers'] = payload.failsafe_providers
         updated_fields['failsafe_providers'] = payload.failsafe_providers
+    if payload.use_global_proxy is not None:
+        instances[idx]['use_global_proxy'] = payload.use_global_proxy
+        updated_fields['use_global_proxy'] = payload.use_global_proxy
+    if payload.use_custom_tokenizer is not None:
+        instances[idx]['use_custom_tokenizer'] = payload.use_custom_tokenizer
+        updated_fields['use_custom_tokenizer'] = payload.use_custom_tokenizer
 
     _save_openai_instances(instances)
     # чтобы не потерялись ключи и остальные поля, reload
@@ -323,35 +295,6 @@ async def ui_api_patch_openai_instance_meta(
         "updated_fields": updated_fields
     })
 
-@router.put("/openai-instances/{instance_name}/proxy-settings", name="ui_api_update_openai_instance_proxy_settings")
-async def ui_api_update_openai_instance_proxy_settings(
-    instance_name: str,
-    payload: UpdateOpenAIInstanceProxyPayload,
-    request: Request,
-    username: str = Depends(get_current_username)
-):
-    """
-    Обновить поле use_global_proxy у конкретного openai-compatible инстанса.
-    """
-    instances = _load_openai_instances()
-    found = False
-    for instance in instances:
-        if instance['name'] == instance_name:
-            instance['use_global_proxy'] = payload.use_global_proxy
-            found = True
-            break
-    if not found:
-        raise HTTPException(status_code=404, detail=f"Instance '{instance_name}' not found.")
-
-    _save_openai_instances(instances)
-    # Чтобы настройки применились без перезагрузки:
-    module_registry = request.app.state.module_registry
-    if hasattr(module_registry, 'reload_module_config'):
-        await module_registry.reload_module_config("OAIC", new_config=instances)
-    return JSONResponse(content={
-        "status": "success",
-        "message": f"use_global_proxy for instance '{instance_name}' set to {payload.use_global_proxy}."
-    })
 
 @router.delete("/openai-instances/{instance_name}", name="ui_api_delete_openai_instance")
 async def ui_api_delete_openai_instance(

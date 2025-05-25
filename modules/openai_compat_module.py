@@ -1,4 +1,3 @@
-import datetime
 import httpx
 from httpx_socks import AsyncProxyTransport
 from typing import Dict, Any, Optional, AsyncGenerator, List
@@ -10,11 +9,8 @@ import logging
 from fastapi import HTTPException
 import json
 
-# Импортируем функцию reformat_messages
 from handlers.misc.one_messager import reformat_messages
-# Импортируем функцию для получения настроек reformat_messages
 from admin_router import get_reformat_settings
-# Импортируем кастомный токенайзер
 from handlers.misc.libs.tokenizer.main import get_token_count
 
 logger = logging.getLogger(__name__)
@@ -23,10 +19,7 @@ class OpenAICompatModule(BaseModule):
 
     @staticmethod
     def parse_instance_and_model_id(model_identifier: str):
-        """
-        Парсер для нового id вида OAIC/{instance}/{provider_path}.
-        Возвращает: (instance_name: str, provider_model_path: str)
-        """
+        """Парсер для id вида OAIC/{instance}/{provider_path}."""
         if not isinstance(model_identifier, str):
             return None, None
         if model_identifier.startswith("OAIC/"):
@@ -53,14 +46,8 @@ class OpenAICompatModule(BaseModule):
             pass
 
     def reload_module_config(self, new_config: list):
-        """
-        Перезагружает конфиг инстансов для модуля OAIC на лету.
-        """
+        """Перезагружает конфиг инстансов для модуля OAIC на лету."""
         self.instances_config = new_config
-        # Если есть дополнительные менеджеры (например, self.instance_api_key_managers), пересоздать их тут:
-        # self.instance_api_key_managers.clear()
-        # for instance_conf in self.instances_config:
-        #     ...
         logger.info("OpenAICompatModule: конфиг инстансов успешно перезагружен.")
 
     def get_name(self) -> str:
@@ -116,7 +103,6 @@ class OpenAICompatModule(BaseModule):
 
         current_proxy_config = None
         httpx_proxies = None
-        # INDIVIDUAL PROXY LOGIC: учитываем флаг use_global_proxy
         use_global_proxy = instance_config.get("use_global_proxy", True)
         if use_global_proxy and self.proxy_manager.active:
             current_proxy_config = self.proxy_manager.get_proxy()
@@ -227,7 +213,6 @@ class OpenAICompatModule(BaseModule):
 
         current_proxy_config = None
         httpx_proxies = None
-        # INDIVIDUAL PROXY LOGIC: учитываем флаг use_global_proxy
         use_global_proxy = instance_config.get("use_global_proxy", True)
         if use_global_proxy and self.proxy_manager.active:
             current_proxy_config = self.proxy_manager.get_proxy()
@@ -326,7 +311,6 @@ class OpenAICompatModule(BaseModule):
         payload_to_send = dict(request)
         payload_to_send["model"] = actual_model_name
 
-        # Проверяем настройку reformat_messages
         reformat_settings = get_reformat_settings()
         print(self.get_name() + " " + instance_name)
         module_reformat_settings = reformat_settings.get(instance_name, {})
@@ -345,7 +329,6 @@ class OpenAICompatModule(BaseModule):
 
         instance_config = self._get_instance_config(instance_name)
         use_custom = instance_config and instance_config.get("use_custom_tokenizer")
-        # Если кастомный подсчёт не нужен - поток без прослойки
         if not use_custom:
             async for chunk in self._execute_streaming_with_rotation(instance_name, "/chat/completions", payload_to_send):
                 if isinstance(chunk, dict) and "id" in chunk:
@@ -353,7 +336,6 @@ class OpenAICompatModule(BaseModule):
                 yield chunk
             return
 
-        # --- stream с накоплением для custom usage ---
         collected_completion = ""
         prompt_str = ""
         if "messages" in payload_to_send:
@@ -363,15 +345,12 @@ class OpenAICompatModule(BaseModule):
                 prompt_str = "\n".join(payload_to_send["prompt"])
             else:
                 prompt_str = str(payload_to_send["prompt"])
-        # Проксируем генератор и подменяем usage только в последнем чанке
         async for chunk in self._execute_streaming_with_rotation(instance_name, "/chat/completions", payload_to_send):
             if isinstance(chunk, dict) and "id" in chunk:
                 chunk["instance_name"] = instance_name
-            # Накапливаем ответ если есть delta->content или choices[0].delta.content
             try:
                 if "choices" in chunk and chunk["choices"]:
                     delta = chunk["choices"][0].get("delta", {})
-                    # Как в debug-примере — delta: {content: ""}
                     part = delta.get("content", "")
                     if part: collected_completion += part
             except Exception as e:
@@ -382,7 +361,7 @@ class OpenAICompatModule(BaseModule):
             if "choices" in chunk and chunk["choices"]:
                 finish = chunk["choices"][0].get("finish_reason") == "stop"
 
-            # usage часто есть только в финальном чанке (или usage можно считать только там)
+            
             if finish and "usage" in chunk:
                 try:
                     prompt_tokens = get_token_count(prompt_str, actual_model_name)
@@ -395,7 +374,7 @@ class OpenAICompatModule(BaseModule):
                     }
                 except Exception as err:
                     logger.exception(f"Ошибка пересчёта usage кастомным токенайзером в stream: {err}")
-                    # не трогаем usage если ошибка
+                    
             yield chunk
     async def list_models(self) -> Dict[str, Any]:
         all_instance_models = []
@@ -624,7 +603,5 @@ class OpenAICompatModule(BaseModule):
             logger.error(f"HTTPStatusError during audio translation for instance {instance_name}: {e.response.text}")
             raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
         except Exception as e:
-            logger.error(f"Error during audio translation for instance {instance_name}: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Audio translation failed: {str(e)}")
             logger.error(f"Error during audio translation for instance {instance_name}: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Audio translation failed: {str(e)}")

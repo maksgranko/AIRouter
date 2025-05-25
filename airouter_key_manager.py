@@ -4,7 +4,6 @@ import secrets
 from typing import List, Optional
 import logging
 
-# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -35,7 +34,7 @@ class AIRouterApiKeyManager:
 
     def _load_keys(self):
         """Загружает API ключи из указанного файла."""
-        self._ensure_keys_file_exists() # Убедимся, что файл существует перед чтением
+        self._ensure_keys_file_exists()
         try:
             if os.path.exists(self.keys_file_path):
                 with open(self.keys_file_path, 'r') as f:
@@ -47,7 +46,6 @@ class AIRouterApiKeyManager:
                         logger.error(f"Invalid format in key file {self.keys_file_path}. Expected a list of strings.")
                         self.api_keys = []
             else:
-                # _ensure_keys_file_exists должен был создать файл, но на всякий случай
                 logger.warning(f"Key file {self.keys_file_path} not found. No keys loaded.")
                 self.api_keys = []
         except json.JSONDecodeError:
@@ -59,7 +57,7 @@ class AIRouterApiKeyManager:
 
     def _save_keys_to_file(self) -> bool:
         """Сохраняет текущий список ключей в JSON-файл."""
-        self._ensure_keys_file_exists() # Убедимся, что файл и директория существуют
+        self._ensure_keys_file_exists()
         try:
             with open(self.keys_file_path, 'w') as f:
                 json.dump(self.api_keys, f, indent=2)
@@ -86,7 +84,7 @@ class AIRouterApiKeyManager:
         new_key = secrets.token_hex(length)
         if self.add_key(new_key):
             return new_key
-        return None # Если добавление не удалось (например, ключ уже существует, что маловероятно для token_hex)
+        return None
 
     def add_key(self, api_key: str) -> bool:
         """Добавляет новый API ключ и сохраняет в файл."""
@@ -120,44 +118,3 @@ class AIRouterApiKeyManager:
         """Перезагружает ключи из файла."""
         logger.info(f"Reloading AIRouter API keys from {self.keys_file_path}...")
         self._load_keys()
-
-# Пример использования (для тестирования)
-if __name__ == '__main__':
-    # Убедимся, что тестовый файл создается в текущей директории, а не в configs
-    test_keys_file = "temp_airouter_keys.json"
-    
-    # Удаляем старый тестовый файл, если он есть
-    if os.path.exists(test_keys_file):
-        os.remove(test_keys_file)
-
-    manager = AIRouterApiKeyManager(keys_file_path=test_keys_file)
-    
-    print(f"Initial keys: {manager.get_all_keys()}")
-
-    key1 = manager.generate_and_add_key()
-    print(f"Generated key 1: {key1}")
-    print(f"Keys after adding key1: {manager.get_all_keys()}")
-
-    key2 = "manual_test_key_123"
-    manager.add_key(key2)
-    print(f"Keys after adding key2: {manager.get_all_keys()}")
-
-    print(f"Key '{key1}' exists: {manager.key_exists(key1)}")
-    print(f"Key 'non_existent_key' exists: {manager.key_exists('non_existent_key')}")
-
-    manager.remove_key(key1)
-    print(f"Keys after removing key1: {manager.get_all_keys()}")
-
-    manager.remove_key("another_non_existent_key")
-
-    # Проверка перезагрузки
-    # Изменим файл вручную
-    if os.path.exists(test_keys_file):
-        with open(test_keys_file, 'w') as f:
-            json.dump(["reloaded_key1", "reloaded_key2"], f)
-        manager.reload_keys()
-        print(f"Keys after reloading: {manager.get_all_keys()}")
-
-    # Очистка
-    if os.path.exists(test_keys_file):
-        os.remove(test_keys_file)

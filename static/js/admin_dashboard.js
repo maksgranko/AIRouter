@@ -608,9 +608,9 @@ async function loadDashboardData() {
                 const checked = switchElem.checked;
                 const instanceName = switchElem.dataset.instanceName;
                 try {
-                    const url = `/api/admin/ui/settings/openai-instances/${encodeURIComponent(instanceName)}/proxy-settings`;
-                    const res = await makeApiRequest(url, 'PUT', { use_global_proxy: checked });
-                    window.showNotification('notification_area','notification_area', res.message || `Настройка прокси для инстанса "${instanceName}" обновлена.`);
+                    const url = `/api/admin/ui/settings/openai-instances/${encodeURIComponent(instanceName)}/meta`;
+                    const res = await makeApiRequest(url, 'PATCH', { use_global_proxy: checked });
+                    window.showNotification('notification_area', res.message || `Настройка прокси для инстанса "${instanceName}" обновлена.`);
                     loadDashboardData();
                 } catch (err) { /* ошибка обработается глобально */ }
             });
@@ -621,8 +621,8 @@ async function loadDashboardData() {
                 const checked = switchElem.checked;
                 const instanceName = switchElem.dataset.instanceName;
                 try {
-                    const url = `/api/admin/ui/settings/openai-instances/${encodeURIComponent(instanceName)}/custom-tokenizer`;
-                    const res = await makeApiRequest(url, 'PUT', { use_custom_tokenizer: checked });
+                    const url = `/api/admin/ui/settings/openai-instances/${encodeURIComponent(instanceName)}/meta`;
+                    const res = await makeApiRequest(url, 'PATCH', { use_custom_tokenizer: checked });
                     window.showNotification('notification_area', res.message || `Настройка кастомного токенайзера для инстанса "${instanceName}" обновлена.`);
                     loadDashboardData();
                 } catch (err) { /* ошибка обработается глобально */ }

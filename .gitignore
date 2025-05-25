@@ -9,3 +9,5 @@
 /handlers/misc/__pycache__
 /handlers/misc/libs/string_comparer/__pycache__
 /handlers/misc/libs/tokenizer/__pycache__
+/tests/__pycache__
+/tests/handlers/misc/libs/tokenizer/__pycache__

@@ -5,8 +5,8 @@
     "api_keys": [
       "bebra"
     ],
-    "use_global_proxy": true,
-    "use_custom_tokenizer": false,
+    "use_global_proxy": false,
+    "use_custom_tokenizer": true,
     "enabled": false,
     "failsafe_providers": []
   },
@@ -18,7 +18,8 @@
     ],
     "use_global_proxy": true,
     "use_custom_tokenizer": true,
-    "enabled": true
+    "enabled": true,
+    "failsafe_providers": []
   },
   {
     "name": "32\u043a\u043a2332\u04303\u0430",
