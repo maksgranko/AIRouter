@@ -13,12 +13,12 @@ class UpdateModuleProxyUsagePayload(BaseModel):
     use_global_proxy: bool
 
 router = APIRouter(
-    prefix="/api/admin/ui/settings", # Новый префикс
+    prefix="/api/admin/ui/settings",
     tags=["settings_admin_ui_api"], 
     dependencies=[Depends(get_current_username)]
 )
 
-@router.put("/proxy", name="ui_api_update_proxy_settings") # Имя маршрута можно оставить
+@router.put("/proxy", name="ui_api_update_proxy_settings")
 async def ui_api_update_proxy_settings(
     payload: UpdateProxySettingPayload,
     request: Request, 

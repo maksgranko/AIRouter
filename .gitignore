@@ -1,10 +1,11 @@
 /.venv
-/__pycache__
 /.vscode
+/.env
+/__pycache__
 /modules/__pycache__
 /api/__pycache__
 /api/admin/__pycache__
 /api/airouter/__pycache__
-raw_bebra.txt
-bebra.txt
 handlers/misc/__pycache__
+libs/string_comparer/__pycache__
+libs/tokenizer/__pycache__
