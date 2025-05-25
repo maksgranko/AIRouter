@@ -307,9 +307,6 @@ async def ui_api_patch_openai_instance_meta(
     if payload.base_url is not None:
         instances[idx]['base_url'] = payload.base_url
         updated_fields['base_url'] = payload.base_url
-    if payload.use_custom_tokenizer is not None:
-        instances[idx]['use_custom_tokenizer'] = payload.use_custom_tokenizer
-        updated_fields['use_custom_tokenizer'] = payload.use_custom_tokenizer
 
     _save_openai_instances(instances)
     # чтобы не потерялись ключи и остальные поля, reload
