@@ -1,0 +1,35 @@
+
+
+[id$="_notification_area"],
+#notification_area,
+#model_notification_area {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    z-index: 1000;
+    width: 300px;
+}
+
+[id$="_notification_area"] .notification,
+#notification_area .notification,
+#model_notification_area .notification {
+    padding: 10px;
+    margin-bottom: 10px;
+    border-radius: 4px;
+    color: white;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    opacity: 1;
+    transition: opacity 0.3s ease-out;
+}
+
+.notification.success {
+    background-color: #28a745;
+}
+
+.notification.info {
+    background-color: #17a2b8;
+}
+
+.notification.error {
+    background-color: #dc3545;
+}
