@@ -228,7 +228,9 @@ async def ui_api_add_openai_instance(
     new_instance = {
         "name": payload.name,
         "base_url": payload.base_url,
-        "api_keys": list(set(payload.api_keys)) # Удаляем дубликаты ключей
+        "api_keys": list(set(payload.api_keys)), # Удаляем дубликаты ключей
+        "enabled": True,
+        "use_global_proxy": True
     }
     instances.append(new_instance)
     _save_openai_instances(instances)
