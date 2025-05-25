@@ -48,7 +48,7 @@ function renderModelsList(models, errorMessage) {
                 const modelIdToCopy = modelIdElement.dataset.modelId;
                 if (modelIdToCopy) {
                     navigator.clipboard.writeText(modelIdToCopy).then(() => {
-                        showModelNotification(`ID модели "${modelIdToCopy}" скопирован!`, 'success');
+                        showModelNotification(`ID модели "${modelIdToCopy}" скопирован!`);
                     }).catch(err => {
                         showModelNotification('Не удалось скопировать ID модели.', 'error');
                         console.error('Clipboard copy failed: ', err);
@@ -112,7 +112,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 const modelIdToCopy = modelIdElement.dataset.modelId;
                 if (modelIdToCopy) {
                     navigator.clipboard.writeText(modelIdToCopy).then(() => {
-                        showModelNotification(`ID модели "${modelIdToCopy}" скопирован!`, 'success');
+                        showModelNotification(`ID модели "${modelIdToCopy}" скопирован!`);
                     }).catch(err => {
                         showModelNotification('Не удалось скопировать ID модели.', 'error');
                         console.error('Clipboard copy failed: ', err);
@@ -144,7 +144,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     });
                     const result = await response.json();
                     if (response.ok && result.status === 'success') {
-                        showModelNotification(result.message || `Настройка для ${modelId} успешно сохранена.`, 'success');
+                        showModelNotification(result.message || `Настройка для ${modelId} успешно сохранена.`);
                     } else {
                         showModelNotification(result.detail || `Ошибка при сохранении настройки для ${modelId}.`, 'error');
                         target.checked = !isEnabled; // Откатываем состояние чекбокса при ошибке
@@ -179,7 +179,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 });
                 const result = await response.json();
                 if (response.ok && result.status === 'success') {
-                    showModelNotification(result.message || 'Список моделей успешно обновлен.', 'success');
+                    showModelNotification(result.message || 'Список моделей успешно обновлен.');
                     renderModelsList(result.models, result.error_message);
                     // После обновления списка, снова загружаем и применяем состояния чекбоксов
                     loadReformatSettings(); 
