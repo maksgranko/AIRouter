@@ -29,9 +29,6 @@
       "OAIC/g4f_riga/qwq-32b": false,
       "OAIC/g4f_riga/gpt-4o": true
     },
-    "openrouter_test_0": {
-      "OAIC/openrouter_test_0/openai/gpt-4o": false
-    },
     "dickgpt": {
       "OAIC/dickgpt/claude-3.7-sonnet": true,
       "OAIC/dickgpt/claude-3.5-sonnet": true,
@@ -43,8 +40,7 @@
       "OAIC/dickgpt/claude-3-5-sonnet": true,
       "OAIC/dickgpt/claude-3-7-sonnet-20250219": true,
       "OAIC/dickgpt/claude-3-7-sonnet-20250219-thinking-32k": true,
-      "OAIC/dickgpt/gpt-3.5-turbo": false,
-      "OAIC/dickgpt/default": false
+      "OAIC/dickgpt/gpt-3.5-turbo": false
     }
   }
 }

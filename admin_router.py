@@ -79,15 +79,21 @@ def get_reformat_settings() -> Dict[str, Dict[str, bool]]:
     return settings.get("reformat_messages_settings", {})
 
 def set_reformat_setting(module_name: str, model_id: str, is_enabled: bool):
-    """Устанавливает или обновляет настройку reformat_messages для конкретной модели."""
+    """Устанавливает или удаляет настройку reformat_messages для конкретной модели.
+    True — записывает настройку; False — удаляет настройку у модели (и модуль, если пуст)."""
     settings = _load_settings()
     if "reformat_messages_settings" not in settings:
         settings["reformat_messages_settings"] = {}
-    
-    if module_name not in settings["reformat_messages_settings"]:
-        settings["reformat_messages_settings"][module_name] = {}
-    
-    settings["reformat_messages_settings"][module_name][model_id] = is_enabled
+    if is_enabled:
+        if module_name not in settings["reformat_messages_settings"]:
+            settings["reformat_messages_settings"][module_name] = {}
+        settings["reformat_messages_settings"][module_name][model_id] = True
+    else:
+        mod_settings = settings["reformat_messages_settings"].get(module_name)
+        if mod_settings and model_id in mod_settings:
+            del mod_settings[model_id]
+            if not mod_settings:
+                del settings["reformat_messages_settings"][module_name]
     _save_settings(settings)
 
 
