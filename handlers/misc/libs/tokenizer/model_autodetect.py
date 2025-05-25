@@ -1,6 +1,6 @@
 # tokenizer/model_autodetect.py
 from typing import Dict, Tuple
-from string_comparer.StringComparer import StringComparer
+from ..string_comparer.StringComparer import StringComparer
 
 MODEL_CONFIGS: Dict[str, float] = {
     "gpt-4o": 1.0,

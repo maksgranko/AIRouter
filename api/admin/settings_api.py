@@ -153,6 +153,9 @@ def _save_openai_instances(instances: list):
 class UpdateOpenAIInstanceProxyPayload(BaseModel):
     use_global_proxy: bool
 
+class UpdateOpenAIInstanceCustomTokenizerPayload(BaseModel):
+    use_custom_tokenizer: bool = None
+
 class OpenAIInstanceMetaUpdatePayload(BaseModel):
     name: str = None
     base_url: str = None
@@ -174,6 +177,36 @@ class OpenAIInstanceKeyPayload(BaseModel):
 
 class UpdateOpenAIInstanceEnabledPayload(BaseModel):
     enabled: bool
+
+@router.put("/openai-instances/{instance_name}/custom-tokenizer", name="ui_api_update_openai_instance_custom_tokenizer")
+async def ui_api_update_openai_instance_custom_tokenizer(
+    instance_name: str,
+    payload: UpdateOpenAIInstanceCustomTokenizerPayload,
+    request: Request,
+    username: str = Depends(get_current_username)
+):
+    """
+    Обновляет поле use_custom_tokenizer у конкретного OpenAI-compatible инстанса.
+    """
+    instances = _load_openai_instances()
+    found = False
+    for instance in instances:
+        if instance["name"] == instance_name:
+            instance["use_custom_tokenizer"] = payload.use_custom_tokenizer
+            found = True
+            break
+    if not found:
+        raise HTTPException(status_code=404, detail=f"Instance '{instance_name}' not found.")
+
+    _save_openai_instances(instances)
+    # Чтобы настройки применились без перезагрузки:
+    module_registry = request.app.state.module_registry
+    if hasattr(module_registry, 'reload_module_config'):
+        await module_registry.reload_module_config("OAIC", new_config=instances)
+    return JSONResponse(content={
+        "status": "success",
+        "message": f"use_custom_tokenizer for instance '{instance_name}' set to {payload.use_custom_tokenizer}."
+    })
 
 @router.patch("/openai-instances/{instance_name}/enabled", name="ui_api_patch_openai_instance_enabled")
 async def ui_api_patch_openai_instance_enabled(
@@ -274,6 +307,9 @@ async def ui_api_patch_openai_instance_meta(
     if payload.base_url is not None:
         instances[idx]['base_url'] = payload.base_url
         updated_fields['base_url'] = payload.base_url
+    if payload.use_custom_tokenizer is not None:
+        instances[idx]['use_custom_tokenizer'] = payload.use_custom_tokenizer
+        updated_fields['use_custom_tokenizer'] = payload.use_custom_tokenizer
 
     _save_openai_instances(instances)
     # чтобы не потерялись ключи и остальные поля, reload

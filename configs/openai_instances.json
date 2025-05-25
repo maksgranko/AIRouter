@@ -6,6 +6,7 @@
       "bebra"
     ],
     "use_global_proxy": true,
+    "use_custom_tokenizer": false,
     "enabled": false
   },
   {
@@ -15,6 +16,7 @@
       "dildo"
     ],
     "use_global_proxy": true,
+    "use_custom_tokenizer": true,
     "enabled": true
   }
 ]

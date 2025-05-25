@@ -429,6 +429,12 @@ async function loadDashboardData() {
                                 Использовать глобальный прокси для этого инстанса
                             </label>
                         </div>
+                        <div class="form-check form-switch mb-2">
+                            <input class="form-check-input openai-instance-custom-tokenizer-switch" type="checkbox" id="use_custom_tokenizer_switch_${instance.name}" data-instance-name="${instance.name}" ${instance.use_custom_tokenizer ? "checked" : ""}>
+                            <label class="form-check-label" for="use_custom_tokenizer_switch_${instance.name}">
+                                Применить кастомный подсчёт токенов
+                            </label>
+                        </div>
                         <h6>API Ключи:</h6>
                         ${keysHtml}
                         <form class="openai-instance-key-add-form mt-2" data-instance-name="${instance.name}">
@@ -565,6 +571,19 @@ async function loadDashboardData() {
                     const url = `/api/admin/ui/settings/openai-instances/${encodeURIComponent(instanceName)}/proxy-settings`;
                     await makeApiRequest(url, 'PUT', { use_global_proxy: checked });
                     showNotification(`Настройка прокси для инстанса "${instanceName}" обновлена.`);
+                    loadDashboardData();
+                } catch (err) { /* ошибка обработается глобально */ }
+            });
+        });
+        // Обработка чекбокса кастомного токенайзера
+        document.querySelectorAll('.openai-instance-custom-tokenizer-switch').forEach(switchElem => {
+            switchElem.addEventListener('change', async function(e) {
+                const checked = switchElem.checked;
+                const instanceName = switchElem.dataset.instanceName;
+                try {
+                    const url = `/api/admin/ui/settings/openai-instances/${encodeURIComponent(instanceName)}/custom-tokenizer`;
+                    await makeApiRequest(url, 'PUT', { use_custom_tokenizer: checked });
+                    showNotification(`Настройка кастомного токенайзера для инстанса "${instanceName}" обновлена.`);
                     loadDashboardData();
                 } catch (err) { /* ошибка обработается глобально */ }
             });

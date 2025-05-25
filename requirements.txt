@@ -1,4 +1,5 @@
 fastapi
+tiktoken
 uvicorn[standard]
 openai<1.0.0
 httpx==0.28.1
@@ -6,4 +7,5 @@ httpx-socks
 requests[socks]
 jinja2
 python-multipart
+Levenshtein
 python-dotenv

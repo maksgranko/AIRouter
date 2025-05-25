@@ -14,6 +14,8 @@ import json
 from handlers.misc.one_messager import reformat_messages
 # Импортируем функцию для получения настроек reformat_messages
 from admin_router import get_reformat_settings
+# Импортируем кастомный токенайзер
+from handlers.misc.libs.tokenizer.main import get_token_count
 
 logger = logging.getLogger(__name__)
 
@@ -329,17 +331,6 @@ class OpenAICompatModule(BaseModule):
         print(self.get_name() + " " + instance_name)
         module_reformat_settings = reformat_settings.get(instance_name, {})
         
-        # model_id в настройках хранится как "module_name/model_id", но здесь model_id уже без префикса модуля
-        # Поэтому нужно использовать model_identifier, который включает префикс модуля
-        # Или же, если model.id в admin_models.html уже содержит префикс, то model_id будет "OAIC/instance/model"
-        # В данном случае model_identifier уже имеет формат "OAIC/instance/model",
-        # а actual_model_name - это "instance/model".
-        # Нам нужно проверить настройку для полного model_identifier, который приходит в запросе.
-        # Или же, если model.id в admin_models.html уже содержит префикс, то model_id будет "OAIC/instance/model"
-        # В admin_router.py set_reformat_setting принимает model_id и module_name.
-        # model_id в admin_router.py будет "instance/model" (без OAIC), а module_name будет "OAIC".
-        # Поэтому здесь нужно проверять по actual_model_name и self.get_name().
-        
         if module_reformat_settings.get(model_identifier, False):
             logger.warning(f"Reformat messages enabled for model '{actual_model_name}' in module '{self.get_name()}'. Applying reformat_messages.")
             if "messages" in payload_to_send:
@@ -352,11 +343,60 @@ class OpenAICompatModule(BaseModule):
 
         logger.debug(f"OpenAI Compatible chat_completion for instance '{instance_name}', model '{actual_model_name}'. Request: {payload_to_send}")
 
+        instance_config = self._get_instance_config(instance_name)
+        use_custom = instance_config and instance_config.get("use_custom_tokenizer")
+        # Если кастомный подсчёт не нужен - поток без прослойки
+        if not use_custom:
+            async for chunk in self._execute_streaming_with_rotation(instance_name, "/chat/completions", payload_to_send):
+                if isinstance(chunk, dict) and "id" in chunk:
+                    chunk["instance_name"] = instance_name
+                yield chunk
+            return
+
+        # --- stream с накоплением для custom usage ---
+        collected_completion = ""
+        prompt_str = ""
+        if "messages" in payload_to_send:
+            prompt_str = "\n".join([msg.get("content", "") for msg in payload_to_send["messages"]])
+        elif "prompt" in payload_to_send:
+            if isinstance(payload_to_send["prompt"], list):
+                prompt_str = "\n".join(payload_to_send["prompt"])
+            else:
+                prompt_str = str(payload_to_send["prompt"])
+        # Проксируем генератор и подменяем usage только в последнем чанке
         async for chunk in self._execute_streaming_with_rotation(instance_name, "/chat/completions", payload_to_send):
             if isinstance(chunk, dict) and "id" in chunk:
                 chunk["instance_name"] = instance_name
-            yield chunk
+            # Накапливаем ответ если есть delta->content или choices[0].delta.content
+            try:
+                if "choices" in chunk and chunk["choices"]:
+                    delta = chunk["choices"][0].get("delta", {})
+                    # Как в debug-примере — delta: {content: ""}
+                    part = delta.get("content", "")
+                    if part: collected_completion += part
+            except Exception as e:
+                logger.exception(f"Ошибка накопления completion части: {e}")
 
+            # Если это финишный чанк 
+            finish = False
+            if "choices" in chunk and chunk["choices"]:
+                finish = chunk["choices"][0].get("finish_reason") == "stop"
+
+            # usage часто есть только в финальном чанке (или usage можно считать только там)
+            if finish and "usage" in chunk:
+                try:
+                    prompt_tokens = get_token_count(prompt_str, actual_model_name)
+                    completion_tokens = get_token_count(collected_completion, actual_model_name)
+                    chunk["usage"] = {
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                        "total_tokens": prompt_tokens + completion_tokens,
+                        "prompt_tokens_details": {"cached_tokens": 0}
+                    }
+                except Exception as err:
+                    logger.exception(f"Ошибка пересчёта usage кастомным токенайзером в stream: {err}")
+                    # не трогаем usage если ошибка
+            yield chunk
     async def list_models(self) -> Dict[str, Any]:
         all_instance_models = []
         for instance_conf in self.instances_config:
@@ -392,7 +432,49 @@ class OpenAICompatModule(BaseModule):
         payload_to_send = dict(request)
         payload_to_send["model"] = actual_model_name
 
-        return await self._execute_non_streaming_with_rotation(instance_name, "POST", "/completions", payload_to_send)
+        result = await self._execute_non_streaming_with_rotation(instance_name, "POST", "/completions", payload_to_send)
+        instance_config = self._get_instance_config(instance_name)
+        # Если пересчёт активен, пересчитать usage вручную
+        if instance_config and instance_config.get("use_custom_tokenizer"):
+            try:
+                raw_prompt = ""
+                # Для chat/completions это "messages", для completions это "prompt"
+                if "messages" in payload_to_send:
+                    # Склеить все сообщения (role+content) для чат-режима
+                    raw_prompt = "\n".join(
+                        [msg.get("content", "") for msg in payload_to_send["messages"]]
+                    )
+                elif "prompt" in payload_to_send:
+                    if isinstance(payload_to_send["prompt"], list):
+                        raw_prompt = "\n".join(payload_to_send["prompt"])
+                    else:
+                        raw_prompt = str(payload_to_send["prompt"])
+                # Извлечь текст ответа модели
+                completion_text = ""
+                if "choices" in result and result["choices"]:
+                    # Сначала смотрим message.content, fallback к text
+                    message = result["choices"][0]
+                    # Для chat: {"message": {"content": ...}}
+                    if "message" in message and isinstance(message["message"], dict) and "content" in message["message"]:
+                        completion_text = message["message"]["content"]
+                    elif "text" in message:
+                        completion_text = message["text"]
+
+                prompt_tokens = get_token_count(raw_prompt, actual_model_name)
+                completion_tokens = get_token_count(completion_text, actual_model_name)
+                # Можно доработать prompt_tokens_details, если требуется кэш
+                usage_custom = {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": prompt_tokens + completion_tokens,
+                    "prompt_tokens_details": {"cached_tokens": 0}
+                }
+                result["usage"] = usage_custom
+            except Exception as err:
+                logger.exception(f"Ошибка пересчёта usage кастомным токенайзером: {err}")
+                # Не перезаписываем usage при сбое
+
+        return result
 
     async def embeddings(self, request: Dict[str, Any]) -> Dict[str, Any]:
         model_identifier = request.get("model", "")
