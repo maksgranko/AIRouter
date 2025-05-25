@@ -35,23 +35,6 @@
     color: #6c757d; /* Bootstrap .text-muted */
 }
 
-/* Стили для уведомлений, если они не будут наследоваться из общего CSS */
-#model_notification_area .notification {
-    padding: 10px;
-    margin-bottom: 10px;
-    border-radius: 4px;
-    color: white;
-    box-shadow: 0 2px 4px rgba(0,0,0,0.2);
-    opacity: 1;
-    transition: opacity 0.3s ease-out;
-}
-#model_notification_area .notification.success {
-    background-color: #28a745;
-}
-#model_notification_area .notification.error {
-    background-color: #dc3545;
-}
-
 .clickable-model-id {
     cursor: pointer;
 }

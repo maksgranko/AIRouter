@@ -6,6 +6,8 @@
     <title>Список Доступных Моделей - Панель Администратора</title>
     <!-- Bootstrap CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- Уведомления (переиспользуемые стили) -->
+    <link rel="stylesheet" href="{{ url_for('static', path='css/notifications.css') }}">
     <!-- Custom CSS for admin_dashboard (if common styles are there) -->
     <link rel="stylesheet" href="{{ url_for('static', path='css/admin_dashboard.css') }}">
     <!-- Custom CSS for this page -->
@@ -87,6 +89,7 @@
             ui_api_get_reformat_settings: "{{ url_for('ui_api_get_reformat_settings') }}"
         };
     </script>
+    <script src="{{ url_for('static', path='js/notifications.js') }}" defer></script>
     <script src="{{ url_for('static', path='js/admin_models.js') }}" defer></script>
     <!-- Bootstrap JS Bundle ( включает Popper) -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0-alpha1/dist/js/bootstrap.bundle.min.js" defer></script>

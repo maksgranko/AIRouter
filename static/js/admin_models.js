@@ -1,20 +1,7 @@
 function showModelNotification(message, type = 'success') {
-    const notificationArea = document.getElementById('model_notification_area');
-    if (!notificationArea) {
-        console.warn("Notification area 'model_notification_area' not found.");
-        // Если область уведомлений не найдена, можно использовать alert как запасной вариант,
-        // но в данном случае, если пользователь просит использовать уведомления,
-        // это означает, что notificationArea должна существовать.
-        // alert(message); 
-        return;
+    if (typeof window.showNotification === 'function') {
+        window.showNotification('model_notification_area', message, type, 4000);
     }
-    const notification = document.createElement('div');
-    notification.className = `alert alert-${type === 'success' ? 'success' : 'danger'} mt-2`;
-    notification.role = 'alert';
-    notification.innerText = message;
-
-    notificationArea.innerHTML = '';
-    notificationArea.appendChild(notification);
 }
 
 function renderModelsList(models, errorMessage) {

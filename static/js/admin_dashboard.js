@@ -1,17 +1,8 @@
 // Предполагается, что объект URLS будет доступен глобально из HTML-шаблона
 let handlersAttached = false;
 
-function showNotification(message, type = 'success') {
-    const notificationArea = document.getElementById('notification_area');
-    const notification = document.createElement('div');
-    notification.className = `notification ${type}`;
-    notification.innerText = message;
-    notificationArea.appendChild(notification);
-    setTimeout(() => {
-        notification.style.opacity = '0';
-        setTimeout(() => notification.remove(), 300);
-    }, 5000);
-}
+console.log('[debug] window.showNotification:', window.showNotification);
+console.log('[debug] notification_area:', document.getElementById('notification_area'));
 
 async function makeApiRequest(url, method = 'GET', body = null) {
     const headers = { 'Content-Type': 'application/json' };
@@ -32,7 +23,7 @@ async function makeApiRequest(url, method = 'GET', body = null) {
         return responseData;
     } catch (error) {
         console.error(`Ошибка API запроса к ${url}:`, error);
-        showNotification(error.message || 'Сетевая ошибка или ошибка сервера.', 'error');
+        window.showNotification && window.showNotification('notification_area', error.message || 'Сетевая ошибка или ошибка сервера.', 'error');
         throw error;
     }
 }
@@ -128,7 +119,7 @@ async function loadDashboardData() {
                             const url = `/api/admin/ui/keys/service/${encodeURIComponent(currentService)}/key`;
                             const payload = { old_api_key: keyValue, new_api_key: val };
                             const res = await makeApiRequest(url, 'PATCH', payload);
-                            showNotification(res.message || 'API-ключ изменён.');
+                            window.showNotification(res.message || 'API-ключ изменён.');
                             loadDashboardData();
                         } catch (e) {}
                     } else {
@@ -303,7 +294,7 @@ async function loadDashboardData() {
                                 const url = `/api/admin/ui/keys/airouter/key`;
                                 const payload = { old_api_key: keyValue, new_api_key: val };
                                 const res = await makeApiRequest(url, 'PATCH', payload);
-                                showNotification(res.message || 'API-ключ изменён.');
+                                window.showNotification(res.message || 'API-ключ изменён.');
                                 loadDashboardData();
                             } catch (e) {}
                         } else {
@@ -337,7 +328,7 @@ async function loadDashboardData() {
                                 const url = `/api/admin/ui/keys/airouter/key`;
                                 const payload = { old_api_key: keyValue, new_api_key: val };
                                 const res = await makeApiRequest(url, 'PATCH', payload);
-                                showNotification(res.message || 'API-ключ изменён.');
+                                window.showNotification(res.message || 'API-ключ изменён.');
                                 loadDashboardData();
                             } catch (e) {}
                         } else {
@@ -467,7 +458,7 @@ async function loadDashboardData() {
                                     const url = `/api/admin/ui/settings/openai-instances/${encodeURIComponent(instance.name)}/keys`;
                                     const payload = { old_api_key: keyValue, new_api_key: val };
                                     const res = await makeApiRequest(url, 'PATCH', payload);
-                                    showNotification(res.message || 'API-ключ изменён.');
+                                    window.showNotification(res.message || 'API-ключ изменён.');
                                     loadDashboardData();
                                 } catch (e) {}
                             } else {
@@ -499,7 +490,7 @@ async function loadDashboardData() {
                             try {
                                 const url = `/api/admin/ui/settings/openai-instances/${encodeURIComponent(instance.name)}/meta`;
                                 const res = await makeApiRequest(url, 'PATCH', { name: val });
-                                showNotification(res.message || 'Название инстанса изменено.');
+                                window.showNotification(res.message || 'Название инстанса изменено.');
                                 loadDashboardData();
                             } catch (e) {}
                         } else {
@@ -529,7 +520,7 @@ async function loadDashboardData() {
                             try {
                                 const url = `/api/admin/ui/settings/openai-instances/${encodeURIComponent(instance.name)}/meta`;
                                 const res = await makeApiRequest(url, 'PATCH', { base_url: val });
-                                showNotification(res.message || 'Base URL изменён.');
+                                window.showNotification(res.message || 'Base URL изменён.');
                                 loadDashboardData();
                             } catch (e) {}
                         } else {
@@ -556,8 +547,8 @@ async function loadDashboardData() {
                 const moduleName = switchElem.dataset.moduleName;
                 try {
                     const url = `/api/admin/ui/settings/module/${encodeURIComponent(moduleName)}/proxy-settings`;
-                    await makeApiRequest(url, 'PUT', { use_global_proxy: checked });
-                    showNotification(`Настройка прокси для модуля "${moduleName}" обновлена.`);
+                    const res = await makeApiRequest(url, 'PUT', { use_global_proxy: checked });
+                    window.showNotification(res.message || `Настройка прокси для модуля "${moduleName}" обновлена.`);
                     loadDashboardData();
                 } catch (err) { /* ошибка обработается глобально */ }
             });
@@ -569,8 +560,8 @@ async function loadDashboardData() {
                 const instanceName = switchElem.dataset.instanceName;
                 try {
                     const url = `/api/admin/ui/settings/openai-instances/${encodeURIComponent(instanceName)}/proxy-settings`;
-                    await makeApiRequest(url, 'PUT', { use_global_proxy: checked });
-                    showNotification(`Настройка прокси для инстанса "${instanceName}" обновлена.`);
+                    const res = await makeApiRequest(url, 'PUT', { use_global_proxy: checked });
+                    window.showNotification(res.message || `Настройка прокси для инстанса "${instanceName}" обновлена.`);
                     loadDashboardData();
                 } catch (err) { /* ошибка обработается глобально */ }
             });
@@ -582,8 +573,8 @@ async function loadDashboardData() {
                 const instanceName = switchElem.dataset.instanceName;
                 try {
                     const url = `/api/admin/ui/settings/openai-instances/${encodeURIComponent(instanceName)}/custom-tokenizer`;
-                    await makeApiRequest(url, 'PUT', { use_custom_tokenizer: checked });
-                    showNotification(`Настройка кастомного токенайзера для инстанса "${instanceName}" обновлена.`);
+                    const res = await makeApiRequest(url, 'PUT', { use_custom_tokenizer: checked });
+                    window.showNotification(res.message || `Настройка кастомного токенайзера для инстанса "${instanceName}" обновлена.`);
                     loadDashboardData();
                 } catch (err) { /* ошибка обработается глобально */ }
             });
@@ -610,7 +601,7 @@ function attachFormHandlers() {
             }
             try {
                 const result = await makeApiRequest(URLS.updateProxySettings, 'PUT', { setting_name: settingName, value: value });
-                showNotification(result.message || 'Настройка прокси обновлена.');
+                window.showNotification(result.message || 'Настройка прокси обновлена.');
                 loadDashboardData();
             } catch (e) { /* ошибка уже показана */ }
         });
@@ -627,11 +618,11 @@ function attachFormHandlers() {
         if (form.classList.contains('api-key-add-form')) {
             const apiKeyInput = form.querySelector('input[name="api_key"]');
             const apiKey = apiKeyInput.value;
-            if (!apiKey) { showNotification('Ключ API не может быть пустым.', 'error'); return; }
+            if (!apiKey) { window.showNotification('Ключ API не может быть пустым.', 'error'); return; }
             try {
                 const url = URLS.addServiceKey.replace('SERVICE_NAME_PLACEHOLDER', serviceName);
                 const result = await makeApiRequest(url, 'POST', { api_key: apiKey });
-                showNotification(result.message || 'Ключ API добавлен.');
+                window.showNotification && window.showNotification('notification_area', result.message || 'Ключ API добавлен.', 'success', 4000);
                 apiKeyInput.value = ''; // Очистить поле ввода
                 loadDashboardData();
             } catch (e) { /* ошибка уже показана */ }
@@ -641,7 +632,7 @@ function attachFormHandlers() {
             try {
                 const url = URLS.deleteServiceKey.replace('SERVICE_NAME_PLACEHOLDER', serviceName);
                 const result = await makeApiRequest(url, 'DELETE', { api_key: apiKey });
-                showNotification(result.message || 'Ключ API удален.');
+                window.showNotification && window.showNotification('notification_area', result.message || 'Ключ API удален.', 'success', 4000);
                 loadDashboardData();
             } catch (e) { /* ошибка уже показана */ }
         }
@@ -657,10 +648,10 @@ function attachFormHandlers() {
             const urlInput = form.querySelector('#new_proxy_url');
             const type = typeInput.value;
             const urlValue = urlInput.value;
-            if(!urlValue) { showNotification('URL прокси не может быть пустым.', 'error'); return; }
+            if(!urlValue) { window.showNotification('URL прокси не может быть пустым.', 'error'); return; }
             try {
                 const result = await makeApiRequest(URLS.addProxy, 'POST', {type, url: urlValue});
-                showNotification(result.message || 'Прокси добавлен.');
+                window.showNotification(result.message || 'Прокси добавлен.');
                 urlInput.value = ''; // Очистить поле
                 loadDashboardData();
             } catch (e) {}
@@ -669,19 +660,19 @@ function attachFormHandlers() {
             const urlValue = form.dataset.url;
              try {
                 const result = await makeApiRequest(URLS.deleteProxy, 'DELETE', {url: urlValue});
-                showNotification(result.message || 'Прокси удален.');
+                window.showNotification(result.message || 'Прокси удален.');
                 loadDashboardData();
             } catch (e) {}
         } else if (form.id === 'reload_proxies_form'){
              try {
                 const result = await makeApiRequest(URLS.reloadProxies, 'POST');
-                showNotification(result.message || 'Список прокси перезагружен.');
+                window.showNotification(result.message || 'Список прокси перезагружен.');
                 loadDashboardData();
             } catch (e) {}
         } else if (form.id === 'shuffle_proxies_form'){
              try {
                 const result = await makeApiRequest(URLS.shuffleProxies, 'POST');
-                showNotification(result.message || 'Список прокси перемешан.');
+                window.showNotification(result.message || 'Список прокси перемешан.');
                 loadDashboardData();
             } catch (e) {}
         }
@@ -697,7 +688,7 @@ function attachFormHandlers() {
             try {
                 const url = URLS.updateModuleStatus.replace('MODULE_NAME_PLACEHOLDER', moduleName);
                 const result = await makeApiRequest(url, 'PUT', {active: isActive});
-                showNotification(result.message || `Статус модуля ${moduleName} обновлен.`);
+                window.showNotification && window.showNotification('notification_area', result.message || `Статус модуля ${moduleName} обновлен.`, 'success', 4000);
                 loadDashboardData();
             } catch (e) {}
         }
@@ -709,7 +700,7 @@ function attachFormHandlers() {
         const isActive = document.getElementById('require_airouter_api_key').value === 'true';
         try {
             const result = await makeApiRequest(URLS.updateAirouterSecurity, 'PUT', {require_api_key: isActive});
-            showNotification(result.message || 'Настройка безопасности AIRouter API обновлена.');
+            window.showNotification(result.message || 'Настройка безопасности AIRouter API обновлена.');
             loadDashboardData();
         } catch (e) {}
     });
@@ -719,8 +710,8 @@ function attachFormHandlers() {
         event.preventDefault();
          try {
             const result = await makeApiRequest(URLS.generateAirouterKey, 'POST');
-            showNotification(result.message || 'Новый ключ AIRouter сгенерирован.');
-            if(result.new_key) showNotification(`Новый ключ: ${result.new_key}`, 'success'); // Показываем сам ключ
+            window.showNotification(result.message || 'Новый ключ AIRouter сгенерирован.');
+            if(result.new_key) window.showNotification(`Новый ключ: ${result.new_key}`, 'success'); // Показываем сам ключ
             loadDashboardData();
         } catch (e) {}
     });
@@ -732,7 +723,7 @@ function attachFormHandlers() {
             const apiKey = form.dataset.key;
             try {
                 const result = await makeApiRequest(URLS.deleteAirouterKey, 'DELETE', {api_key: apiKey});
-                showNotification(result.message || 'Ключ AIRouter удален.');
+                window.showNotification(result.message || 'Ключ AIRouter удален.');
                 loadDashboardData();
             } catch (e) {}
          }
@@ -748,12 +739,12 @@ function attachFormHandlers() {
         const apiKeys = apiKeysRaw.split(',').map(k => k.trim()).filter(k => k);
 
         if (!name || !baseUrl || apiKeys.length === 0) {
-            showNotification('Все поля (Название, Base URL, API Ключи) должны быть заполнены.', 'error');
+            window.showNotification('Все поля (Название, Base URL, API Ключи) должны быть заполнены.', 'error');
             return;
         }
         try {
             const result = await makeApiRequest(URLS.addOpenAIInstance, 'POST', { name, base_url: baseUrl, api_keys: apiKeys });
-            showNotification(result.message || 'Инстанс OpenAI Compatible добавлен.');
+            window.showNotification(result.message || 'Инстанс OpenAI Compatible добавлен.');
             form.reset();
             loadDashboardData();
         } catch (e) { /* ошибка уже показана */ }
@@ -773,7 +764,7 @@ function attachFormHandlers() {
             try {
                 const url = `/api/admin/ui/settings/openai-instances/${encodeURIComponent(instanceName)}/enabled`;
                 const result = await makeApiRequest(url, 'PATCH', { enabled: !enabledNow });
-                showNotification(result.message || (!enabledNow ? 'Инстанс включён.' : 'Инстанс отключён.'));
+                window.showNotification(result.message || (!enabledNow ? 'Инстанс включён.' : 'Инстанс отключён.'));
                 loadDashboardData();
             } catch (e) { /* ошибка уже показана */ }
             return;
@@ -785,7 +776,7 @@ function attachFormHandlers() {
             try {
                 const url = URLS.deleteOpenAIInstance.replace('INSTANCE_NAME_PLACEHOLDER', instanceName);
                 const result = await makeApiRequest(url, 'DELETE');
-                showNotification(result.message || `Инстанс "${instanceName}" удален.`);
+                window.showNotification(result.message || `Инстанс "${instanceName}" удален.`);
                 loadDashboardData();
             } catch (e) { /* ошибка уже показана */ }
         }
@@ -796,7 +787,7 @@ function attachFormHandlers() {
             try {
                 const url = URLS.deleteOpenAIInstanceKey.replace('INSTANCE_NAME_PLACEHOLDER', instanceName);
                 const result = await makeApiRequest(url, 'DELETE', { api_key: apiKey });
-                showNotification(result.message || 'Ключ API удален.');
+                window.showNotification(result.message || 'Ключ API удален.');
                 loadDashboardData();
             } catch (e) { /* ошибка уже показана */ }
         }
@@ -810,11 +801,11 @@ function attachFormHandlers() {
             const instanceName = form.dataset.instanceName;
             const apiKeyInput = form.querySelector('input[name="api_key"]');
             const apiKey = apiKeyInput.value;
-            if (!apiKey) { showNotification('Ключ API не может быть пустым.', 'error'); return; }
+            if (!apiKey) { window.showNotification('Ключ API не может быть пустым.', 'error'); return; }
             try {
                 const url = URLS.addOpenAIInstanceKey.replace('INSTANCE_NAME_PLACEHOLDER', instanceName);
                 const result = await makeApiRequest(url, 'POST', { api_key: apiKey });
-                showNotification(result.message || 'Ключ API добавлен к инстансу.');
+                window.showNotification(result.message || 'Ключ API добавлен к инстансу.');
                 apiKeyInput.value = '';
                 loadDashboardData();
             } catch (e) { /* ошибка уже показана */ }
