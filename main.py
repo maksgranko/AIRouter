@@ -22,7 +22,7 @@ import logging # Добавляем импорт logging
 
 # Настраиваем базовое логирование
 open_browser_on_save = False
-logging_type = logging.WARNING
+logging_type = logging.DEBUG
 
 logging.basicConfig(level=logging_type, format='%(levelname)s:%(name)s:%(asctime)s:%(message)s') # Изменено на DEBUG и добавлен asctime
 logger = logging.getLogger(__name__) # Создаем логгер для main.py

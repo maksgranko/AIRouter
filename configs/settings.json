@@ -9,7 +9,7 @@
     "gemini": true,
     "OAIC": true
   },
-  "require_airouter_api_key": true,
+  "require_airouter_api_key": false,
   "module_proxy_usage": {
     "openai": true,
     "gemini": true

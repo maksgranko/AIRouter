@@ -23,6 +23,8 @@ async def reformat_messages(input_json):
     instructions = ""
     user_section = ""
     instructions_exists = False
+    current_user_message = ""
+    
     if 'cline' in first_message.lower() or 'roo' in first_message.lower():
         instructions = f"<INSTRUCTIONS>{first_message.strip()}</INSTRUCTIONS>\n\n"
         messages.pop(0)
@@ -37,10 +39,10 @@ async def reformat_messages(input_json):
             context_blocks.append(f"<role:{role}>{content}</role:{role}>")
             if role == 'user':
                 user_length += 1
-
+        current_user_message = messages[-1]['content'].strip()
+        
     context_section = "<YOUR_CONTEXT>\n" + "\n".join(context_blocks) + "\n</YOUR_CONTEXT>\n\n"
     logging.info("Instructions: " + str(instructions_exists))
-    current_user_message = messages[-1]['content'].strip()
     if instructions_exists:
         before_instructions = "THE <INSTRUCTIONS> BLOCK CONTAINS CRITICAL DIRECTIVES THAT OVERRIDE ALL OTHER GUIDANCE AND HAVE ABSOLUTE PRIORITY - YOU MUST FOLLOW EVERY INSTRUCTION EXACTLY AS WRITTEN, USE ALL REQUIRED TOOLS ACTIVELY (NEVER SIMULATE TOOL OUTPUT), COMPLETE ALL SPECIFIED TASKS WITHOUT OMISSION, AND PRIORITIZE INSTRUCTIONS OVER CONVERSATION HISTORY OR GENERAL GUIDELINES.\n"
     if instructions_exists and len(messages) > 2: 
@@ -48,11 +50,12 @@ async def reformat_messages(input_json):
     elif instructions_exists:
         user_section = "<CURRENT_USER_MESSAGE>\n"+find_between_r(first_message,"<task>","</task>")+"\n</CURRENT_USER_MESSAGE>"
     else:
-        user_section = "<CURRENT_USER_MESSAGE>\n"+current_user_message+"\n</CURRENT_USER_MESSAGE>"
+        if current_user_message != "":
+            user_section = "<CURRENT_USER_MESSAGE>\n"+current_user_message+"\n</CURRENT_USER_MESSAGE>"
     # print(user_section)
     system_message = find_service_block(current_user_message)
     if len(system_message) != 0:
-        system_message= "<CURRENT_SYSTEM_MESSAGE>\n"+{system_message}+"\n</CURRENT_SYSTEM_MESSAGE>"
+        system_message= "<CURRENT_SYSTEM_MESSAGE>\n"+ system_message +"\n</CURRENT_SYSTEM_MESSAGE>"
     print(system_message)
     final_message = main_prompt + system_message + user_section + before_instructions + instructions + before_context + context_section 
     
