@@ -390,10 +390,17 @@ async function loadDashboardData() {
                                 data-instance-name="${instance.name}"
                                 data-enabled="${instance.enabled}"
                                 title="${instance.enabled ? 'Выключить инстанс' : 'Включить инстанс'}"
-                                style="background-color: ${instance.enabled ? '#198754' : '#adb5bd'}; color: #fff;">
-                                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="currentColor" class="bi bi-power" viewBox="0 0 16 16">
-                                  <path d="M7.5 1v7h1V1h-1zm.36 10.15a4.5 4.5 0 1 1 1.27 0l.48.87a5.5 5.5 0 1 0-2.23 0l.48-.87zm1.27-1.25a3.5 3.5 0 1 0-2.23 0l.48.87a4.5 4.5 0 1 1 1.27 0l.48-.87z"/>
-                                </svg>
+                                style="background-color: #fff; border: 2px solid ${instance.enabled ? '#19c232' : '#dc3545'}; border-radius: 5px; padding: 2px 5px;">
+                                ${
+                                  instance.enabled
+                                    ? `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" fill="#19c232" viewBox="0 0 16 16">
+                                          <path d="M12.736 3.97a.75.75 0 0 1 1.061 1.06l-6.363 6.364-3.182-3.182a.75.75 0 1 1 1.061-1.06l2.121 2.12 5.303-5.302z"/>
+                                       </svg>`
+                                    : `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" fill="none" stroke="#dc3545" stroke-width="2" class="bi bi-x-lg" viewBox="0 0 16 16">
+                                          <line x1="4" y1="4" x2="12" y2="12" />
+                                          <line x1="12" y1="4" x2="4" y2="12" />
+                                       </svg>`
+                                }
                             </button>
                             <h5 class="mb-0 d-inline-block editable-instance-name" style="cursor:pointer;" data-instance-name="${instance.name}">
                                 <span class="display-instance-name">${instance.name}</span>
