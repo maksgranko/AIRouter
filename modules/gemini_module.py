@@ -96,7 +96,7 @@ class GeminiChatModule(BaseModule):
                 proxy_url_for_log = current_proxy_config['url'] if current_proxy_config else "None (Direct)"
                 logger.debug(f"Attempting Gemini API call: {method} {url} with key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}")
                 try:
-                    client_args = {"timeout": 30.0}
+                    client_args = {"timeout": 60.0}
                     transport = None
                     if httpx_proxies:
                         proxy_url_for_transport = httpx_proxies.get("http://")
@@ -275,7 +275,7 @@ class GeminiChatModule(BaseModule):
                 logger.debug(f"Attempting Gemini API stream: POST {url} with key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}")
 
                 try:
-                    client_args = {"timeout": None}
+                    client_args = {"timeout": 60.0}
                     transport_stream = None
                     if httpx_proxies:
                         proxy_url_for_transport_stream = httpx_proxies.get("http://")

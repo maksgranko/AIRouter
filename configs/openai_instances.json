@@ -2,41 +2,27 @@
   {
     "name": "g4f_riga",
     "base_url": "http://146.19.84.231:8080/v1",
-    "api_keys": [
-      "bebra"
-    ],
+    "api_keys": ["bebra"],
     "use_global_proxy": false,
     "use_custom_tokenizer": true,
-    "enabled": false,
+    "enabled": true,
     "failsafe_providers": []
   },
   {
     "name": "dickgpt",
     "base_url": "http://213.219.205.126:9898/v1",
-    "api_keys": [
-      "dildo"
-    ],
+    "api_keys": ["dildo"],
     "use_global_proxy": true,
     "use_custom_tokenizer": true,
     "enabled": true,
-    "failsafe_providers": []
+    "failsafe_providers": ["g4f_riga"]
   },
   {
     "name": "32\u043a\u043a2332\u04303\u0430",
     "base_url": "https://api.example.com/v1",
-    "api_keys": [
-      "asdasdasd"
-    ],
-    "enabled": true,
-    "use_global_proxy": true
-  },
-  {
-    "name": "https://api.example.com/v1",
-    "base_url": "https://api.example.com/v1",
-    "api_keys": [
-      "https://api.example.com/v1"
-    ],
-    "enabled": true,
-    "use_global_proxy": true
+    "api_keys": ["asdasdasd"],
+    "enabled": false,
+    "use_global_proxy": true,
+    "failsafe_providers": ["g4f_riga"]
   }
 ]

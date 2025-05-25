@@ -1,4 +1,5 @@
 @echo off
+chcp 65001
 echo Очистка всех директорий __pycache__ ...
 
 for /d /r %%i in (__pycache__) do (
@@ -7,4 +8,3 @@ for /d /r %%i in (__pycache__) do (
 )
 
 echo Очистка завершена.
-pause

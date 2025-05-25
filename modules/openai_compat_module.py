@@ -12,8 +12,10 @@ import json
 from handlers.misc.one_messager import reformat_messages
 from admin_router import get_reformat_settings
 from handlers.misc.libs.tokenizer.main import get_token_count
+from handlers.misc.s200_handler import check_string_for_errors,FilteredStreamContentException
 
 logger = logging.getLogger(__name__)
+
 
 class OpenAICompatModule(BaseModule):
 
@@ -116,7 +118,7 @@ class OpenAICompatModule(BaseModule):
         proxy_url_for_log = current_proxy_config['url'] if current_proxy_config else "None (Direct)"
         logger.debug(f"Attempting OpenAI Compatible API call for instance '{instance_name}': {method} {url} with key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}")
         try:
-            client_args = {"timeout": 30.0}
+            client_args = {"timeout": 60.0}
             transport = None
             if httpx_proxies:
                 proxy_url_for_transport = httpx_proxies.get("http://") 
@@ -139,6 +141,28 @@ class OpenAICompatModule(BaseModule):
                 else:
                     raise ValueError(f"Unsupported HTTP method: {method}")
                 response.raise_for_status()
+
+                logger.debug(f"Тело ответа от {instance_name}: {response.text}")
+
+                # Проверка на ошибки в ответе с кодом 200
+                try:
+                    check_string_for_errors(response.text)
+                except Exception as e:
+                    logger.warning(f"Found error in 200 response for instance {instance_name}: {e}. Raising HTTPException to trigger failsafe.")
+                    # По формату Exception: 'Код 500: ...' — заберём код и текст, если по формату, иначе код 500.
+                    exception_text = str(e)
+                    if exception_text.startswith("Код ") and ":" in exception_text:
+                        try:
+                            code = int(exception_text.split(":", 1)[0].replace("Код", "").strip())
+                            detail = exception_text.split(":", 1)[1].strip()
+                        except Exception:
+                            code = 500
+                            detail = exception_text
+                    else:
+                        code = 500
+                        detail = exception_text
+                    raise HTTPException(status_code=code, detail=detail)
+
                 response_data = response.json()
                 logger.info(f"OpenAI Compatible API call successful for instance {instance_name} with key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}.")
 
@@ -230,7 +254,7 @@ class OpenAICompatModule(BaseModule):
         proxy_url_for_log = current_proxy_config['url'] if current_proxy_config else "None (Direct)"
         logger.debug(f"Attempting OpenAI Compatible API stream for instance '{instance_name}': POST {url} with key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}")
         try:
-            client_args = {"timeout": None}
+            client_args = {"timeout": 60.0}
             transport_stream = None
             if httpx_proxies:
                 proxy_url_for_transport_stream = httpx_proxies.get("http://")
@@ -285,6 +309,17 @@ class OpenAICompatModule(BaseModule):
                             logger.debug(f"Received stream message for instance '{instance_name}': {data_content}")
                             try:
                                 chunk_obj = json.loads(data_content)
+                                content = ""
+                                try:
+                                    content = chunk_obj["choices"][0].get("delta", {}).get("content", "")
+                                except Exception:
+                                    content = ""
+                                if content:
+                                    try:
+                                        check_string_for_errors(content)
+                                    except Exception as e:
+                                        logger.warning(f"Filtered stream chunk (instance '{instance_name}') по фильтру: {str(e)}")
+                                        raise FilteredStreamContentException(str(e))
                                 yield chunk_obj
                             except json.JSONDecodeError:
                                 logger.error(f"JSONDecodeError in stream from instance '{instance_name}': {data_content}")
@@ -295,6 +330,8 @@ class OpenAICompatModule(BaseModule):
                     return
 
         except (httpx.RequestError, Exception) as e:
+            if isinstance(e, FilteredStreamContentException):
+                raise
             error_type_name = type(e).__name__
             logger.warning(f"{error_type_name} for instance {instance_name} stream (key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}): {str(e)}. Not retrying with proxy/key rotation for now.")
             yield {"error": {"message": f"Error during stream connection or processing for instance '{instance_name}': {str(e)}", "type": "server_error", "code": "stream_error"}}
@@ -307,7 +344,7 @@ class OpenAICompatModule(BaseModule):
             logger.error(f"Invalid model identifier format for OpenAI Compatible module: {model_identifier}")
             yield {"error": {"message": f"Invalid model identifier format. Expected 'oai_compat_INSTANCE_NAME/model_name' or 'openai_INSTANCE_NAME/model_name', got '{model_identifier}'.", "type": "invalid_request_error"}}
             return
-        
+            
         payload_to_send = dict(request)
         payload_to_send["model"] = actual_model_name
 
@@ -327,55 +364,114 @@ class OpenAICompatModule(BaseModule):
 
         logger.debug(f"OpenAI Compatible chat_completion for instance '{instance_name}', model '{actual_model_name}'. Request: {payload_to_send}")
 
-        instance_config = self._get_instance_config(instance_name)
-        use_custom = instance_config and instance_config.get("use_custom_tokenizer")
-        if not use_custom:
-            async for chunk in self._execute_streaming_with_rotation(instance_name, "/chat/completions", payload_to_send):
-                if isinstance(chunk, dict) and "id" in chunk:
-                    chunk["instance_name"] = instance_name
-                yield chunk
-            return
+        instance_conf = self._get_instance_config(instance_name)
+        failsafe_chain = [instance_name]
+        if instance_conf and instance_conf.get("failsafe_providers"):
+            for prov in instance_conf["failsafe_providers"]:
+                if prov not in failsafe_chain:
+                    failsafe_chain.append(prov)
+        else:
+            enabled_instances = [inst["name"] for inst in self.instances_config if inst.get("enabled", True)]
+            if instance_name not in enabled_instances:
+                enabled_instances.insert(0, instance_name)
+            failsafe_chain = enabled_instances
 
-        collected_completion = ""
-        prompt_str = ""
-        if "messages" in payload_to_send:
-            prompt_str = "\n".join([msg.get("content", "") for msg in payload_to_send["messages"]])
-        elif "prompt" in payload_to_send:
-            if isinstance(payload_to_send["prompt"], list):
-                prompt_str = "\n".join(payload_to_send["prompt"])
-            else:
-                prompt_str = str(payload_to_send["prompt"])
-        async for chunk in self._execute_streaming_with_rotation(instance_name, "/chat/completions", payload_to_send):
-            if isinstance(chunk, dict) and "id" in chunk:
-                chunk["instance_name"] = instance_name
-            try:
-                if "choices" in chunk and chunk["choices"]:
-                    delta = chunk["choices"][0].get("delta", {})
-                    part = delta.get("content", "")
-                    if part: collected_completion += part
-            except Exception as e:
-                logger.exception(f"Ошибка накопления completion части: {e}")
-
-            # Если это финишный чанк 
-            finish = False
-            if "choices" in chunk and chunk["choices"]:
-                finish = chunk["choices"][0].get("finish_reason") == "stop"
-
-            
-            if finish and "usage" in chunk:
+        last_exc = None
+        repeat_count = 2
+        for i in range(0,repeat_count):
+            for current_instance in failsafe_chain:
                 try:
-                    prompt_tokens = get_token_count(prompt_str, actual_model_name)
-                    completion_tokens = get_token_count(collected_completion, actual_model_name)
-                    chunk["usage"] = {
-                        "prompt_tokens": prompt_tokens,
-                        "completion_tokens": completion_tokens,
-                        "total_tokens": prompt_tokens + completion_tokens,
-                        "prompt_tokens_details": {"cached_tokens": 0}
-                    }
-                except Exception as err:
-                    logger.exception(f"Ошибка пересчёта usage кастомным токенайзером в stream: {err}")
-                    
-            yield chunk
+                    first_chunk = None
+                    stream = self._execute_streaming_with_rotation(current_instance, "/chat/completions", payload_to_send)
+                    # Попробовать взять первый чанк
+                    async for chunk in stream:
+                        first_chunk = chunk
+                        break
+                    if first_chunk is None:
+                        raise Exception("Stream завершился без сообщений.")
+
+                    content_candidate = ""
+                    if isinstance(first_chunk, dict):
+                        if "choices" in first_chunk and first_chunk["choices"]:
+                            delta = first_chunk["choices"][0].get("delta", {})
+                            content_candidate = delta.get("content", "")
+                        elif "error" in first_chunk:
+                            content_candidate = first_chunk["error"].get("message", "filtered")
+                    if content_candidate:
+                        try:
+                            check_string_for_errors(content_candidate)
+                        except Exception as e:
+                            raise FilteredStreamContentException(str(e))
+
+                    # Если всё хорошо — yield первый чанк, затем собирать usage (если нужно) и yield все остальные чанки
+                    instance_config = self._get_instance_config(current_instance)
+                    use_custom = instance_config and instance_config.get("use_custom_tokenizer")
+
+                    collected_completion = ""
+                    prompt_str = ""
+                    if "messages" in payload_to_send:
+                        prompt_str = "\n".join([msg.get("content", "") for msg in payload_to_send["messages"]])
+                    elif "prompt" in payload_to_send:
+                        if isinstance(payload_to_send["prompt"], list):
+                            prompt_str = "\n".join(payload_to_send["prompt"])
+                        else:
+                            prompt_str = str(payload_to_send["prompt"])
+
+                    # Выдать первый чанк
+                    if use_custom and "choices" in first_chunk and first_chunk["choices"]:
+                        delta = first_chunk["choices"][0].get("delta", {})
+                        part = delta.get("content", "")
+                        if part:
+                            collected_completion += part
+                    yield first_chunk
+
+                    # Yield остальные чанки
+                    finish_sent = False
+                    async for chunk in stream:
+                        # накапливаем текст для usage
+                        if use_custom and "choices" in chunk and chunk["choices"]:
+                            try:
+                                delta = chunk["choices"][0].get("delta", {})
+                                part = delta.get("content", "")
+                                if part:
+                                    collected_completion += part
+                            except Exception as e:
+                                logger.exception(f"Ошибка накопления completion части: {e}")
+
+                            # определить финальный чанк — finish_reason == "stop" и есть usage
+                            finish = False
+                            if chunk["choices"][0].get("finish_reason") == "stop":
+                                finish = True
+
+                            # добавить usage в финальный чанк
+                            if finish and "usage" in chunk and not finish_sent:
+                                try:
+                                    prompt_tokens = get_token_count(prompt_str, actual_model_name)
+                                    completion_tokens = get_token_count(collected_completion, actual_model_name)
+                                    chunk["usage"] = {
+                                        "prompt_tokens": prompt_tokens,
+                                        "completion_tokens": completion_tokens,
+                                        "total_tokens": prompt_tokens + completion_tokens,
+                                        "prompt_tokens_details": {"cached_tokens": 0}
+                                    }
+                                except Exception as err:
+                                    logger.exception(f"Ошибка пересчёта usage кастомным токенайзером в stream: {err}")
+                                finish_sent = True
+                        yield chunk
+                    return  # На первом успешном инстансе прекращаем
+                except FilteredStreamContentException as filtered_exc:
+                    last_exc = filtered_exc
+                    logger.warning(f"Failsafe: instance '{current_instance}' не ответил (reason: {filtered_exc}). Перехожу к следующему инстансу.")
+                except Exception as exc:
+                    last_exc = exc
+                    logger.warning(f"Failsafe: instance '{current_instance}' вернул ошибку: {exc}")
+
+        log_level = logger.getEffectiveLevel()
+        if log_level <= logging.DEBUG:
+            msg = f"Все указанные провайдеры (failsafe chain) недоступны. Подробнее: {last_exc} Возможно, стоит попробовать ещё раз."
+        else:
+            msg = f"Инстанс '{instance_name}' временно недоступен или выдал отфильтрированный/ошибочный результат. Возможно, стоит попробовать ещё раз."
+        raise HTTPException(status_code=503, detail=msg)
     async def list_models(self) -> Dict[str, Any]:
         all_instance_models = []
         for instance_conf in self.instances_config:
@@ -427,50 +523,55 @@ class OpenAICompatModule(BaseModule):
             failsafe_chain = enabled_instances
 
         last_exc = None
-        for current_instance in failsafe_chain:
-            try:
-                result = await self._execute_non_streaming_with_rotation(current_instance, "POST", "/completions", payload_to_send)
-                # Успех — считаем usage если нужно и возвращаем
-                instance_config = self._get_instance_config(current_instance)
-                if instance_config and instance_config.get("use_custom_tokenizer"):
-                    try:
-                        raw_prompt = ""
-                        # Для chat/completions это "messages", для completions "prompt"
-                        if "messages" in payload_to_send:
-                            raw_prompt = "\n".join(
-                                [msg.get("content", "") for msg in payload_to_send["messages"]]
-                            )
-                        elif "prompt" in payload_to_send:
-                            if isinstance(payload_to_send["prompt"], list):
-                                raw_prompt = "\n".join(payload_to_send["prompt"])
-                            else:
-                                raw_prompt = str(payload_to_send["prompt"])
-                        completion_text = ""
-                        if "choices" in result and result["choices"]:
-                            message = result["choices"][0]
-                            if "message" in message and isinstance(message["message"], dict) and "content" in message["message"]:
-                                completion_text = message["message"]["content"]
-                            elif "text" in message:
-                                completion_text = message["text"]
+        repeat_count = 2
+        for i in range(0,repeat_count):
+            for current_instance in failsafe_chain:
+                try:
+                    result = await self._execute_non_streaming_with_rotation(current_instance, "POST", "/completions", payload_to_send)
+                    # Успех — считаем usage если нужно и возвращаем
+                    instance_config = self._get_instance_config(current_instance)
+                    if instance_config and instance_config.get("use_custom_tokenizer"):
+                        try:
+                            raw_prompt = ""
+                            # Для chat/completions это "messages", для completions "prompt"
+                            if "messages" in payload_to_send:
+                                raw_prompt = "\n".join(
+                                    [msg.get("content", "") for msg in payload_to_send["messages"]]
+                                )
+                            elif "prompt" in payload_to_send:
+                                if isinstance(payload_to_send["prompt"], list):
+                                    raw_prompt = "\n".join(payload_to_send["prompt"])
+                                else:
+                                    raw_prompt = str(payload_to_send["prompt"])
+                            completion_text = ""
+                            if "choices" in result and result["choices"]:
+                                message = result["choices"][0]
+                                if "message" in message and isinstance(message["message"], dict) and "content" in message["message"]:
+                                    completion_text = message["message"]["content"]
+                                elif "text" in message:
+                                    completion_text = message["text"]
 
-                        prompt_tokens = get_token_count(raw_prompt, actual_model_name)
-                        completion_tokens = get_token_count(completion_text, actual_model_name)
-                        usage_custom = {
-                            "prompt_tokens": prompt_tokens,
-                            "completion_tokens": completion_tokens,
-                            "total_tokens": prompt_tokens + completion_tokens,
-                            "prompt_tokens_details": {"cached_tokens": 0}
-                        }
-                        result["usage"] = usage_custom
-                    except Exception as err:
-                        logger.exception(f"Ошибка пересчёта usage кастомным токенайзером: {err}")
-                return result
-            except Exception as exc:
-                last_exc = exc
-                logger.warning(f"Failsafe: instance '{current_instance}' не ответил (reason: {exc}). Перехожу к следующему инстансу.")
+                            prompt_tokens = get_token_count(raw_prompt, actual_model_name)
+                            completion_tokens = get_token_count(completion_text, actual_model_name)
+                            usage_custom = {
+                                "prompt_tokens": prompt_tokens,
+                                "completion_tokens": completion_tokens,
+                                "total_tokens": prompt_tokens + completion_tokens,
+                                "prompt_tokens_details": {"cached_tokens": 0}
+                            }
+                            result["usage"] = usage_custom
+                        except Exception as err:
+                            logger.exception(f"Ошибка пересчёта usage кастомным токенайзером: {err}")
+                    return result
+                except FilteredStreamContentException as filtered_exc:
+                    last_exc = filtered_exc
+                    logger.warning(f"Failsafe: instance '{current_instance}' не ответил (reason: {filtered_exc}). Перехожу к следующему инстансу.")
+                except Exception as exc:
+                    last_exc = FilteredStreamContentException("Failsafe: instance '{current_instance}' не ответил.")
+                    logger.warning(f"Failsafe: instance '{current_instance}' не ответил.")
 
         # Ни один из цепочки не сработал – финальный фейл
-        raise HTTPException(status_code=503, detail=f"Все указанные провайдеры (failsafe chain) недоступны для completion: {str(last_exc)}. Возможно, стоит попробовать ещё раз.")
+        raise HTTPException(status_code=503, detail=f"Все указанные провайдеры (failsafe chain) недоступны. Подробнее: {last_exc} Возможно, стоит попробовать ещё раз.")
 
     async def embeddings(self, request: Dict[str, Any]) -> Dict[str, Any]:
         model_identifier = request.get("model", "")
