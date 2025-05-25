@@ -50,6 +50,17 @@ class OpenAICompatModule(BaseModule):
             # TODO: Интегрировать ApiKeyManager для управления ключами инстансов.
             pass
 
+    def reload_module_config(self, new_config: list):
+        """
+        Перезагружает конфиг инстансов для модуля OAIC на лету.
+        """
+        self.instances_config = new_config
+        # Если есть дополнительные менеджеры (например, self.instance_api_key_managers), пересоздать их тут:
+        # self.instance_api_key_managers.clear()
+        # for instance_conf in self.instances_config:
+        #     ...
+        logger.info("OpenAICompatModule: конфиг инстансов успешно перезагружен.")
+
     def get_name(self) -> str:
         return "OAIC"
 
@@ -70,7 +81,7 @@ class OpenAICompatModule(BaseModule):
     def _get_instance_config(self, instance_name: str) -> Optional[Dict[str, Any]]:
         logger.info(self.instances_config)
         for conf in self.instances_config:
-            if conf["name"] == instance_name:
+            if conf["name"] == instance_name and conf.get("enabled", True):
                 return conf
         return None
 
@@ -103,7 +114,9 @@ class OpenAICompatModule(BaseModule):
 
         current_proxy_config = None
         httpx_proxies = None
-        if self.proxy_manager.active:
+        # INDIVIDUAL PROXY LOGIC: учитываем флаг use_global_proxy
+        use_global_proxy = instance_config.get("use_global_proxy", True)
+        if use_global_proxy and self.proxy_manager.active:
             current_proxy_config = self.proxy_manager.get_proxy()
             httpx_proxies = self._get_httpx_proxies(current_proxy_config)
 
@@ -212,7 +225,9 @@ class OpenAICompatModule(BaseModule):
 
         current_proxy_config = None
         httpx_proxies = None
-        if self.proxy_manager.active:
+        # INDIVIDUAL PROXY LOGIC: учитываем флаг use_global_proxy
+        use_global_proxy = instance_config.get("use_global_proxy", True)
+        if use_global_proxy and self.proxy_manager.active:
             current_proxy_config = self.proxy_manager.get_proxy()
             httpx_proxies = self._get_httpx_proxies(current_proxy_config)
         
@@ -345,6 +360,8 @@ class OpenAICompatModule(BaseModule):
     async def list_models(self) -> Dict[str, Any]:
         all_instance_models = []
         for instance_conf in self.instances_config:
+            if not instance_conf.get("enabled", True):
+                continue
             instance_name = instance_conf["name"]
             logger.debug(f"Listing models for OpenAI Compatible instance: {instance_name}")
             try:

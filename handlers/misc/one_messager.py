@@ -46,13 +46,13 @@ async def reformat_messages(input_json):
     if instructions_exists and len(messages) > 2: 
         logging.info("Instructions + messages length > 2 ")
     elif instructions_exists:
-        user_section = f"<CURRENT_USER_MESSAGE>\n{find_between_r(first_message,"<task>","</task>")}\n</CURRENT_USER_MESSAGE>"
+        user_section = "<CURRENT_USER_MESSAGE>\n"+find_between_r(first_message,"<task>","</task>")+"\n</CURRENT_USER_MESSAGE>"
     else:
-        user_section = f"<CURRENT_USER_MESSAGE>\n{current_user_message}\n</CURRENT_USER_MESSAGE>"
+        user_section = "<CURRENT_USER_MESSAGE>\n"+current_user_message+"\n</CURRENT_USER_MESSAGE>"
     # print(user_section)
     system_message = find_service_block(current_user_message)
     if len(system_message) != 0:
-        f"<CURRENT_SYSTEM_MESSAGE>\n{system_message}\n</CURRENT_SYSTEM_MESSAGE>"
+        system_message= "<CURRENT_SYSTEM_MESSAGE>\n"+{system_message}+"\n</CURRENT_SYSTEM_MESSAGE>"
     print(system_message)
     final_message = main_prompt + system_message + user_section + before_instructions + instructions + before_context + context_section 
     

@@ -79,7 +79,14 @@ async function loadDashboardData() {
                 keys.forEach(key => {
                     keysHtml += `
                         <li style="margin-bottom: 5px; display: flex; justify-content: space-between; align-items: center;">
-                            <span style="word-break: break-all; margin-right: 10px;">${key}</span>
+                            <span style="word-break: break-all; margin-right: 10px;">
+                                <span class="display-service-key">${key}</span>
+                                <span class="edit-service-key-btn" title="Редактировать ключ" style="color: #888; cursor: pointer; margin-left:4px;" data-service-name="${service_name}">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" fill="currentColor" class="bi bi-pencil" viewBox="0 0 16 16">
+                                        <path d="M12.146.854a.5.5 0 0 1 .708 0l2.292 2.292a.5.5 0 0 1 0 .708l-10 10A.5.5 0 0 1 4.5 14H2.5a.5.5 0 0 1-.5-.5v-2a.5.5 0 0 1 .146-.354l10-10zM11.207 2L14 4.793 13.5 5.5 10.707 2.707l.5-.5zm1.086 2.121L12.207 4.5 9.5 7.207V8h.793l2.707-2.707zM3 13v1h1l8.293-8.293-1-1L3 13z"/>
+                                    </svg>
+                                </span>
+                            </span>
                             <form class="api-key-remove-form" data-service="${service_name}" data-key="${key}">
                                 <button type="submit" class="btn btn-danger btn-sm">Удалить</button>
                             </form>
@@ -88,6 +95,52 @@ async function loadDashboardData() {
             } else {
                 keysHtml += '<li>Нет ключей для этого сервиса.</li>';
             }
+        serviceDiv.innerHTML = `
+            <h3 style="color: #333;">Ключи для сервиса: ${service_name}</h3>
+            ${keysHtml}
+            <form class="api-key-add-form" data-service="${service_name}" style="margin-top: 10px;">
+                <div class="input-group mb-3">
+                    <input type="text" id="new_api_key_${service_name}" name="api_key" class="form-control" placeholder="Новый ключ" required>
+                    <button type="submit" class="btn btn-primary">Добавить ключ</button>
+                </div>
+            </form>
+        `;
+        apiKeysSection.appendChild(serviceDiv);
+
+        // ----- Кнопка "Редактировать API-ключ" для сервисов -----
+        serviceDiv.querySelectorAll('.edit-service-key-btn').forEach((editKeyBtn) => {
+            const displayKeySpan = editKeyBtn.previousElementSibling;
+            if (!displayKeySpan) return;
+            editKeyBtn.addEventListener('click', function () {
+                const currentService = editKeyBtn.dataset.serviceName;
+                const keyValue = displayKeySpan.textContent;
+                const input = document.createElement('input');
+                input.type = "text";
+                input.value = keyValue;
+                input.className = "form-control form-control-sm d-inline-block";
+                input.style.width = "200px";
+                displayKeySpan.replaceWith(input);
+                input.focus();
+                input.addEventListener('blur', async function () {
+                    const val = input.value.trim();
+                    if (val && val !== keyValue) {
+                        try {
+                            const url = `/api/admin/ui/keys/service/${encodeURIComponent(currentService)}/key`;
+                            const payload = { old_api_key: keyValue, new_api_key: val };
+                            const res = await makeApiRequest(url, 'PATCH', payload);
+                            showNotification(res.message || 'API-ключ изменён.');
+                            loadDashboardData();
+                        } catch (e) {}
+                    } else {
+                        input.replaceWith(displayKeySpan);
+                    }
+                });
+                input.addEventListener('keydown', function (e) {
+                    if (e.key === 'Enter') input.blur();
+                    if (e.key === 'Escape') { input.replaceWith(displayKeySpan); }
+                });
+            });
+        });
             keysHtml += '</ul>';
 
             serviceDiv.innerHTML = `
@@ -157,6 +210,24 @@ async function loadDashboardData() {
                 const status = data.module_statuses[module_name];
                 const moduleDiv = document.createElement('div');
                 moduleDiv.className = 'setting';
+
+                // use_global_proxy чекбокс (только не OAIC)
+                let proxySwitchHtml = '';
+                if (module_name !== 'OAIC') {
+                    const moduleProxyUsage = (data.module_proxy_usage && typeof data.module_proxy_usage[module_name] !== 'undefined')
+                        ? data.module_proxy_usage[module_name] : true;
+                    // разрешаем только строго true, иначе чекбокс снят
+                    const checkedAttr = (moduleProxyUsage === true) ? 'checked' : '';
+                    proxySwitchHtml = `
+                        <div class="form-check form-switch mb-1">
+                            <input class="form-check-input module-proxy-switch" type="checkbox"
+                                id="use_global_proxy_switch_${module_name}"
+                                data-module-name="${module_name}" ${checkedAttr}>
+                            <label class="form-check-label" for="use_global_proxy_switch_${module_name}">Использовать глобальный прокси для этого модуля</label>
+                        </div>
+                    `;
+                }
+
                 moduleDiv.innerHTML = `
                     <form class="module-status-form" data-module-name="${module_name}">
                         <label for="module_status_${module_name}" class="setting-name">Модуль ${module_name}:</label>
@@ -167,12 +238,14 @@ async function loadDashboardData() {
                         <button type="submit" class="btn btn-primary btn-sm">Применить</button>
                         <small class="ms-2">Текущий статус: <span class="setting-value">${status ? 'Включен' : 'Выключен'}</span></small>
                     </form>
+                    ${proxySwitchHtml}
                 `;
                 moduleSection.appendChild(moduleDiv);
             }
         } else {
             moduleSection.innerHTML = '<p>Нет модулей.</p>';
         }
+
 
         // Безопасность AIRouter API
         document.getElementById('require_airouter_api_key').value = data.require_airouter_api_key ? "true" : "false";
@@ -191,7 +264,14 @@ async function loadDashboardData() {
                 data.airouter_api_keys.forEach(key => {
                     airouterKeysHtml += `
                         <li style="margin-bottom: 5px; display: flex; justify-content: space-between; align-items: center;">
-                            <span style="word-break: break-all; margin-right: 10px;">${key}</span>
+                            <span style="word-break: break-all; margin-right: 10px;">
+                                <span class="display-airouter-key">${key}</span>
+                                <span class="edit-airouter-key-btn" title="Редактировать ключ" style="color: #888; cursor: pointer; margin-left:4px;">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" fill="currentColor" class="bi bi-pencil" viewBox="0 0 16 16">
+                                        <path d="M12.146.854a.5.5 0 0 1 .708 0l2.292 2.292a.5.5 0 0 1 0 .708l-10 10A.5.5 0 0 1 4.5 14H2.5a.5.5 0 0 1-.5-.5v-2a.5.5 0 0 1 .146-.354l10-10zM11.207 2L14 4.793 13.5 5.5 10.707 2.707l.5-.5zm1.086 2.121L12.207 4.5 9.5 7.207V8h.793l2.707-2.707zM3 13v1h1l8.293-8.293-1-1L3 13z"/>
+                                    </svg>
+                                </span>
+                            </span>
                             <form class="airouter-key-remove-form" data-key="${key}">
                                 <button type="submit" class="btn btn-danger btn-sm">Удалить</button>
                             </form>
@@ -202,6 +282,75 @@ async function loadDashboardData() {
             }
             airouterKeysHtml += '</ul>';
             airouterKeysListDiv.innerHTML = airouterKeysHtml;
+
+            // ----- Кнопка "Редактировать API-ключ" для AIRouter -----
+            airouterKeysListDiv.querySelectorAll('.edit-airouter-key-btn').forEach((editKeyBtn) => {
+                const displayKeySpan = editKeyBtn.previousElementSibling;
+                if (!displayKeySpan) return;
+                editKeyBtn.addEventListener('click', function () {
+                    const keyValue = displayKeySpan.textContent;
+                    const input = document.createElement('input');
+                    input.type = "text";
+                    input.value = keyValue;
+                    input.className = "form-control form-control-sm d-inline-block";
+                    input.style.width = "200px";
+                    displayKeySpan.replaceWith(input);
+                    input.focus();
+                    input.addEventListener('blur', async function () {
+                        const val = input.value.trim();
+                        if (val && val !== keyValue) {
+                            try {
+                                const url = `/api/admin/ui/keys/airouter/key`;
+                                const payload = { old_api_key: keyValue, new_api_key: val };
+                                const res = await makeApiRequest(url, 'PATCH', payload);
+                                showNotification(res.message || 'API-ключ изменён.');
+                                loadDashboardData();
+                            } catch (e) {}
+                        } else {
+                            input.replaceWith(displayKeySpan);
+                        }
+                    });
+                    input.addEventListener('keydown', function (e) {
+                        if (e.key === 'Enter') input.blur();
+                        if (e.key === 'Escape') { input.replaceWith(displayKeySpan); }
+                    });
+                });
+            });
+
+            // ----- Кнопка "Редактировать API-ключ" для AIRouter -----
+            airouterKeysListDiv.querySelectorAll('.edit-airouter-key-btn').forEach((editKeyBtn) => {
+                const displayKeySpan = editKeyBtn.previousElementSibling;
+                if (!displayKeySpan) return;
+                editKeyBtn.addEventListener('click', function () {
+                    const keyValue = displayKeySpan.textContent;
+                    const input = document.createElement('input');
+                    input.type = "text";
+                    input.value = keyValue;
+                    input.className = "form-control form-control-sm d-inline-block";
+                    input.style.width = "200px";
+                    displayKeySpan.replaceWith(input);
+                    input.focus();
+                    input.addEventListener('blur', async function () {
+                        const val = input.value.trim();
+                        if (val && val !== keyValue) {
+                            try {
+                                const url = `/api/admin/ui/keys/airouter/key`;
+                                const payload = { old_api_key: keyValue, new_api_key: val };
+                                const res = await makeApiRequest(url, 'PATCH', payload);
+                                showNotification(res.message || 'API-ключ изменён.');
+                                loadDashboardData();
+                            } catch (e) {}
+                        } else {
+                            input.replaceWith(displayKeySpan);
+                        }
+                    });
+                    input.addEventListener('keydown', function (e) {
+                        if (e.key === 'Enter') input.blur();
+                        if (e.key === 'Escape') { input.replaceWith(displayKeySpan); }
+                    });
+                });
+            });
+
         } else {
             airouterKeysContainer.style.display = 'none';
         }
@@ -217,7 +366,14 @@ async function loadDashboardData() {
                     instance.api_keys.forEach(key => {
                         keysHtml += `
                             <li class="list-group-item d-flex justify-content-between align-items-center">
-                                <span style="word-break: break-all; margin-right: 10px;">${key}</span>
+                                <span style="word-break: break-all; margin-right: 10px;">
+                                    <span class="display-instance-key">${key}</span>
+                                    <span class="edit-instance-key-btn" title="Редактировать ключ" style="color: #888; cursor: pointer; margin-left:4px;">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" fill="currentColor" class="bi bi-pencil" viewBox="0 0 16 16">
+                                            <path d="M12.146.854a.5.5 0 0 1 .708 0l2.292 2.292a.5.5 0 0 1 0 .708l-10 10A.5.5 0 0 1 4.5 14H2.5a.5.5 0 0 1-.5-.5v-2a.5.5 0 0 1 .146-.354l10-10zM11.207 2L14 4.793 13.5 5.5 10.707 2.707l.5-.5zm1.086 2.121L12.207 4.5 9.5 7.207V8h.793l2.707-2.707zM3 13v1h1l8.293-8.293-1-1L3 13z"/>
+                                        </svg>
+                                    </span>
+                                </span>
                                 <button type="button" class="btn btn-danger btn-sm openai-instance-key-remove-btn" data-instance-name="${instance.name}" data-key="${key}">Удалить ключ</button>
                             </li>`;
                     });
@@ -226,13 +382,53 @@ async function loadDashboardData() {
                 }
                 keysHtml += '</ul>';
 
+                const useGlobalProxyChecked = instance.use_global_proxy !== false ? 'checked' : '';
                 instanceDiv.innerHTML = `
                     <div class="card-header d-flex justify-content-between align-items-center">
-                        <h5 class="mb-0">Инстанс: ${instance.name}</h5>
+                        <div class="d-flex align-items-center">
+                            <button type="button" class="btn btn-sm me-2 openai-instance-enabled-toggle-btn"
+                                data-instance-name="${instance.name}"
+                                data-enabled="${instance.enabled}"
+                                title="${instance.enabled ? 'Выключить инстанс' : 'Включить инстанс'}"
+                                style="background-color: #fff; border: 2px solid ${instance.enabled ? '#19c232' : '#dc3545'}; border-radius: 5px; padding: 2px 5px;">
+                                ${
+                                  instance.enabled
+                                    ? `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" fill="#19c232" viewBox="0 0 16 16">
+                                          <path d="M12.736 3.97a.75.75 0 0 1 1.061 1.06l-6.363 6.364-3.182-3.182a.75.75 0 1 1 1.061-1.06l2.121 2.12 5.303-5.302z"/>
+                                       </svg>`
+                                    : `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" fill="none" stroke="#dc3545" stroke-width="2" class="bi bi-x-lg" viewBox="0 0 16 16">
+                                          <line x1="4" y1="4" x2="12" y2="12" />
+                                          <line x1="12" y1="4" x2="4" y2="12" />
+                                       </svg>`
+                                }
+                            </button>
+                            <h5 class="mb-0 d-inline-block editable-instance-name" style="cursor:pointer;" data-instance-name="${instance.name}">
+                                <span class="display-instance-name">${instance.name}</span>
+                                <span class="edit-instance-name-btn" title="Редактировать название" style="color: #888; cursor: pointer;">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" fill="currentColor" class="bi bi-pencil" viewBox="0 0 16 16">
+                                        <path d="M12.146.854a.5.5 0 0 1 .708 0l2.292 2.292a.5.5 0 0 1 0 .708l-10 10A.5.5 0 0 1 4.5 14H2.5a.5.5 0 0 1-.5-.5v-2a.5.5 0 0 1 .146-.354l10-10zM11.207 2L14 4.793 13.5 5.5 10.707 2.707l.5-.5zm1.086 2.121L12.207 4.5 9.5 7.207V8h.793l2.707-2.707zM3 13v1h1l8.293-8.293-1-1L3 13z"/>
+                                    </svg>
+                                </span>
+                            </h5>
+                        </div>
                         <button type="button" class="btn btn-danger btn-sm openai-instance-remove-btn" data-instance-name="${instance.name}">Удалить инстанс</button>
                     </div>
                     <div class="card-body">
-                        <p class="card-text"><strong>Base URL:</strong> ${instance.base_url}</p>
+                        <p class="card-text editable-instance-base-url" style="cursor:pointer;">
+                            <strong>Base URL:</strong>
+                            <span class="display-instance-base-url">${instance.base_url}</span>
+                            <span class="edit-instance-base-url-btn" title="Редактировать Base URL" style="color: #888; cursor: pointer;">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="17" height="17" fill="currentColor" class="bi bi-pencil" viewBox="0 0 16 16">
+                                    <path d="M12.146.854a.5.5 0 0 1 .708 0l2.292 2.292a.5.5 0 0 1 0 .708l-10 10A.5.5 0 0 1 4.5 14H2.5a.5.5 0 0 1-.5-.5v-2a.5.5 0 0 1 .146-.354l10-10zM11.207 2L14 4.793 13.5 5.5 10.707 2.707l.5-.5zm1.086 2.121L12.207 4.5 9.5 7.207V8h.793l2.707-2.707zM3 13v1h1l8.293-8.293-1-1L3 13z"/>
+                                </svg>
+                            </span>
+                        </p>
+                        <div class="form-check form-switch mb-2">
+                            <input class="form-check-input openai-instance-proxy-switch" type="checkbox" id="use_global_proxy_switch_${instance.name}" data-instance-name="${instance.name}" ${useGlobalProxyChecked}>
+                            <label class="form-check-label" for="use_global_proxy_switch_${instance.name}">
+                                Использовать глобальный прокси для этого инстанса
+                            </label>
+                        </div>
                         <h6>API Ключи:</h6>
                         ${keysHtml}
                         <form class="openai-instance-key-add-form mt-2" data-instance-name="${instance.name}">
@@ -244,6 +440,102 @@ async function loadDashboardData() {
                     </div>
                 `;
                 instancesSection.appendChild(instanceDiv);
+
+                // ----- Кнопка "Редактировать API-ключ" -----
+                instanceDiv.querySelectorAll('.edit-instance-key-btn').forEach((editKeyBtn, idx) => {
+                    const displayKeySpan = editKeyBtn.previousElementSibling;
+                    if (!displayKeySpan) return;
+                    editKeyBtn.addEventListener('click', function () {
+                        keyValue = displayKeySpan.textContent;
+                        const input = document.createElement('input');
+                        input.type = "text";
+                        input.value = keyValue;
+                        input.className = "form-control form-control-sm d-inline-block";
+                        input.style.width = "220px";
+                        displayKeySpan.replaceWith(input);
+                        input.focus();
+                        input.addEventListener('blur', async function () {
+                            const val = input.value.trim();
+                            if (val && val !== keyValue) {
+                                try {
+                                    const url = `/api/admin/ui/settings/openai-instances/${encodeURIComponent(instance.name)}/keys`;
+                                    const payload = { old_api_key: keyValue, new_api_key: val };
+                                    const res = await makeApiRequest(url, 'PATCH', payload);
+                                    showNotification(res.message || 'API-ключ изменён.');
+                                    loadDashboardData();
+                                } catch (e) {}
+                            } else {
+                                input.replaceWith(displayKeySpan);
+                            }
+                        });
+                        input.addEventListener('keydown', function (e) {
+                            if (e.key === 'Enter') input.blur();
+                            if (e.key === 'Escape') { input.replaceWith(displayKeySpan); }
+                        });
+                    });
+                });
+
+                // Inline editor instance name
+                const editNameBtn = instanceDiv.querySelector('.edit-instance-name-btn');
+                const displayNameSpan = instanceDiv.querySelector('.display-instance-name');
+                editNameBtn?.addEventListener('click', function () {
+                    const input = document.createElement('input');
+                    input.type = "text";
+                    input.value = instance.name;
+                    input.className = "form-control form-control-sm d-inline-block";
+                    input.style.width = "120px";
+                    displayNameSpan.replaceWith(input);
+                    input.focus();
+                    input.addEventListener('blur', async function () {
+                        const val = input.value.trim();
+                        if (val && val !== instance.name) {
+                            // PATCH запрос, имя и старое имя
+                            try {
+                                const url = `/api/admin/ui/settings/openai-instances/${encodeURIComponent(instance.name)}/meta`;
+                                const res = await makeApiRequest(url, 'PATCH', { name: val });
+                                showNotification(res.message || 'Название инстанса изменено.');
+                                loadDashboardData();
+                            } catch (e) {}
+                        } else {
+                            input.replaceWith(displayNameSpan);
+                        }
+                    });
+                    input.addEventListener('keydown', function(e){
+                        if (e.key === 'Enter') input.blur();
+                        if (e.key === 'Escape') {input.replaceWith(displayNameSpan);}
+                    });
+                });
+
+                // Inline editor base_url
+                const editBaseBtn = instanceDiv.querySelector('.edit-instance-base-url-btn');
+                const displayBaseUrlSpan = instanceDiv.querySelector('.display-instance-base-url');
+                editBaseBtn?.addEventListener('click', function () {
+                    const input = document.createElement('input');
+                    input.type = "url";
+                    input.value = instance.base_url;
+                    input.className = "form-control form-control-sm d-inline-block";
+                    input.style.width = "280px";
+                    displayBaseUrlSpan.replaceWith(input);
+                    input.focus();
+                    input.addEventListener('blur', async function () {
+                        const val = input.value.trim();
+                        if (val && val !== instance.base_url) {
+                            try {
+                                const url = `/api/admin/ui/settings/openai-instances/${encodeURIComponent(instance.name)}/meta`;
+                                const res = await makeApiRequest(url, 'PATCH', { base_url: val });
+                                showNotification(res.message || 'Base URL изменён.');
+                                loadDashboardData();
+                            } catch (e) {}
+                        } else {
+                            input.replaceWith(displayBaseUrlSpan);
+                        }
+                    });
+                    input.addEventListener('keydown', function(e){
+                        if (e.key === 'Enter') input.blur();
+                        if (e.key === 'Escape') {input.replaceWith(displayBaseUrlSpan);}
+                    });
+                });
+
             });
         } else {
             instancesSection.innerHTML = '<p>Нет настроенных инстансов OpenAI Compatible.</p>';
@@ -251,6 +543,32 @@ async function loadDashboardData() {
 
 
         attachFormHandlers(); 
+        // чекаем чекбоксы для прокси у модулей
+        document.querySelectorAll('.module-proxy-switch').forEach(switchElem => {
+            switchElem.addEventListener('change', async function(e) {
+                const checked = switchElem.checked;
+                const moduleName = switchElem.dataset.moduleName;
+                try {
+                    const url = `/api/admin/ui/settings/module/${encodeURIComponent(moduleName)}/proxy-settings`;
+                    await makeApiRequest(url, 'PUT', { use_global_proxy: checked });
+                    showNotification(`Настройка прокси для модуля "${moduleName}" обновлена.`);
+                    loadDashboardData();
+                } catch (err) { /* ошибка обработается глобально */ }
+            });
+        });
+        // После динамического рендера добавляем обработчик свитчеров proxy
+        document.querySelectorAll('.openai-instance-proxy-switch').forEach(switchElem => {
+            switchElem.addEventListener('change', async function(e) {
+                const checked = switchElem.checked;
+                const instanceName = switchElem.dataset.instanceName;
+                try {
+                    const url = `/api/admin/ui/settings/openai-instances/${encodeURIComponent(instanceName)}/proxy-settings`;
+                    await makeApiRequest(url, 'PUT', { use_global_proxy: checked });
+                    showNotification(`Настройка прокси для инстанса "${instanceName}" обновлена.`);
+                    loadDashboardData();
+                } catch (err) { /* ошибка обработается глобально */ }
+            });
+        });
     } catch (error) {
         // Ошибка уже обработана в makeApiRequest
     }
@@ -424,7 +742,23 @@ function attachFormHandlers() {
 
     document.getElementById('openai_instances_management_section').addEventListener('click', async function(event) {
         const target = event.target;
-        const instanceName = target.dataset.instanceName;
+        const instanceName = target.dataset.instanceName || target.closest('.openai-instance-enabled-toggle-btn')?.dataset.instanceName;
+
+        // Вкл/выкл инстанс
+        if (target.classList.contains('openai-instance-enabled-toggle-btn') ||
+            target.closest('.openai-instance-enabled-toggle-btn')) {
+            const btn = target.classList.contains('openai-instance-enabled-toggle-btn')
+                ? target
+                : target.closest('.openai-instance-enabled-toggle-btn');
+            const enabledNow = btn.dataset.enabled === 'true';
+            try {
+                const url = `/api/admin/ui/settings/openai-instances/${encodeURIComponent(instanceName)}/enabled`;
+                const result = await makeApiRequest(url, 'PATCH', { enabled: !enabledNow });
+                showNotification(result.message || (!enabledNow ? 'Инстанс включён.' : 'Инстанс отключён.'));
+                loadDashboardData();
+            } catch (e) { /* ошибка уже показана */ }
+            return;
+        }
 
         // Удаление инстанса
         if (target.classList.contains('openai-instance-remove-btn')) {
