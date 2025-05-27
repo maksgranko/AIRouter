@@ -99,6 +99,39 @@ async function loadReformatSettings() {
     }
 }
 
+async function loadSmartContextZipperSettings() {
+    try {
+        if (typeof URLS === 'undefined' || typeof URLS.ui_api_get_smart_context_zipper_settings === 'undefined') {
+            console.error("URLS.ui_api_get_smart_context_zipper_settings is not defined.");
+            return;
+        }
+        const response = await fetch(URLS.ui_api_get_smart_context_zipper_settings, {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            credentials: 'same-origin'
+        });
+        const result = await response.json();
+        if (response.ok && result.status === 'success') {
+            const settings = result.settings;
+            document.querySelectorAll('.smart-context-zipper-checkbox').forEach(checkbox => {
+                const modelId = checkbox.dataset.modelId;
+                const moduleName = checkbox.dataset.moduleName;
+                if (settings[moduleName] && settings[moduleName][modelId] !== undefined) {
+                    checkbox.checked = settings[moduleName][modelId];
+                } else {
+                    checkbox.checked = false;
+                }
+            });
+        } else {
+            console.error("Failed to load smart context zipper settings:", result.detail || "Unknown error");
+        }
+    } catch (err) {
+        console.error("Network error loading smart context zipper settings:", err);
+    }
+}
+
 
 document.addEventListener('DOMContentLoaded', function() {
     const modelsContainer = document.getElementById('models_list_container');
@@ -127,6 +160,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // а также для тех, которые динамически добавляются renderModelsList.
         modelsContainer.addEventListener('change', async function(event) {
             const target = event.target;
+            // reformat_messages_checkbox — старая логика
             if (target.classList.contains('reformat-messages-checkbox')) {
                 const modelId = target.dataset.modelId;
                 const moduleName = target.dataset.moduleName;
@@ -153,6 +187,35 @@ document.addEventListener('DOMContentLoaded', function() {
                     showModelNotification(`Сетевая ошибка при сохранении настройки для ${modelId}.`, 'error');
                     console.error("Reformat setting save error:", err);
                     target.checked = !isEnabled; // Откатываем состояние чекбокса при ошибке
+                }
+            }
+            // Новый обработчик для smart-context-zipper-checkbox
+            if (target.classList.contains('smart-context-zipper-checkbox')) {
+                const modelId = target.dataset.modelId;
+                const moduleName = target.dataset.moduleName;
+                const isEnabled = target.checked;
+
+                showModelNotification(`Сохранение настройки Smart Context Zipper для ${modelId}...`, 'info');
+                try {
+                    const response = await fetch(URLS.ui_api_set_smart_context_zipper_status, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({ model_id: modelId, module_name: moduleName, is_smart_context_zipper_enabled: isEnabled }),
+                        credentials: 'same-origin'
+                    });
+                    const result = await response.json();
+                    if (response.ok && result.status === 'success') {
+                        showModelNotification(result.message || `Зиппер-настройка для ${modelId} успешно сохранена.`);
+                    } else {
+                        showModelNotification(result.detail || `Ошибка при сохранении зиппер-настройки для ${modelId}.`, 'error');
+                        target.checked = !isEnabled;
+                    }
+                } catch (err) {
+                    showModelNotification(`Сетевая ошибка при сохранении зиппер-настройки для ${modelId}.`, 'error');
+                    console.error("SmartContextZipper setting save error:", err);
+                    target.checked = !isEnabled;
                 }
             }
         });
@@ -183,6 +246,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     renderModelsList(result.models, result.error_message);
                     // После обновления списка, снова загружаем и применяем состояния чекбоксов
                     loadReformatSettings(); 
+                    loadSmartContextZipperSettings();
                 } else {
                     const detailMessage = result.detail || (result.error_message || 'Ошибка при обновлении списка моделей.');
                     showModelNotification(detailMessage, 'error');
@@ -197,4 +261,5 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // Загружаем и применяем состояния чекбоксов при загрузке страницы
     loadReformatSettings();
+    loadSmartContextZipperSettings();
 });

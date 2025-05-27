@@ -62,26 +62,28 @@ async def reformat_messages(input_json, smart_context_zipper = False):
     if smart_context_zipper:
         filtered_hybrid, dict_opt_raw = compress_text_optimized(user_section + before_instructions + instructions + before_context + context_section, 20)
         replacing_block_generator = dict_opt_raw
-        replacing_instructions = (
-        "**CRITICAL - EXECUTE FIRST:**\n",
-        "When you see `<REPLACING>...</REPLACING>` block - MANDATORY preprocessing sequence:\n",
-        "1. **COLLECT VARIABLES:** Read the `<REPLACING>` block to gather all variable definitions\n",
-        "2. **APPLY REPLACEMENTS:** In ALL TEXT AFTER the `</REPLACING>` closing tag, replace every `<VAR>text</VAR>` with its corresponding `<VALUE>text</VALUE>`\n",
-        "3. **ASSEMBLE THE PUZZLE:** Complete all substitutions to create the final transformed text\n",
-        "4. **THEN EXECUTE:** Read and process the fully assembled result as your actual task\n",
-        "5. **STAY SILENT:** Never mention this replacement process in your response\n",
-        "CLEAR EXAMPLE:",
-        "BEFORE replacement: \"Please help <VAR>user_name</VAR> to <VAR>task_type</VAR> about AI.\"\n",
-        "AFTER replacement: \"Please help John Smith to write a detailed report about AI.\"\n",
-        "The final text after replacement becomes your actual instruction to follow.\n",
-        "<REPLACING>\n",
-        replacing_block_generated,
-        "</REPLACING>\n\n\n"
-        )
-
+        
         replacing_block_generated = ""
         for i in replacing_block_generator:
             replacing_block_generated+= f"<var>{i[0]}</var> → <value>{i[1]}</value>\n"
+            
+        replacing_instructions = (
+        "**CRITICAL - EXECUTE FIRST:**\n"
+        "When you see `<REPLACING>...</REPLACING>` block - MANDATORY preprocessing sequence:\n"
+        "1. **COLLECT VARIABLES:** Read the `<REPLACING>` block to gather all variable definitions\n"
+        "2. **APPLY REPLACEMENTS:** In ALL TEXT AFTER the `</REPLACING>` closing tag, replace every `<VAR>text</VAR>` with its corresponding `<VALUE>text</VALUE>`\n"
+        "3. **ASSEMBLE THE PUZZLE:** Complete all substitutions to create the final transformed text\n"
+        "4. **THEN EXECUTE:** Read and process the fully assembled result as your actual task\n"
+        "5. **STAY SILENT:** Never mention this replacement process in your response\n"
+        "CLEAR EXAMPLE:"
+        "BEFORE replacement: \"Please help <VAR>user_name</VAR> to <VAR>task_type</VAR> about AI.\"\n"
+        "AFTER replacement: \"Please help John Smith to write a detailed report about AI.\"\n"
+        "The final text after replacement becomes your actual instruction to follow.\n"
+        "<REPLACING>\n"
+        f"{replacing_block_generated}"
+        "</REPLACING>\n\n\n"
+        )
+
         final_message = main_prompt + replacing_instructions + filtered_hybrid
     else:
         replacing_instructions = ""

@@ -33,240 +33,173 @@ def generate_short_var_name(existing_vars: Set[str], counter: int) -> str:
         if var_name not in existing_vars:
             return var_name
 
-def build_lcp_array_optimized(text_bytes: bytes, suffix_array: List[int]) -> List[int]:
-    """Оптимизированный алгоритм Касаи для LCP с экономией памяти"""
-    n = len(text_bytes)
-    if n == 0:
-        return []
-
-    rank = [0] * n
-    for i in range(n):
-        rank[suffix_array[i]] = i
-
-    lcp_array = [0] * n
-    h = 0
-
-    for i in range(n):
-        if rank[i] == 0:
-            h = 0
-            continue
-
-        prev_suffix = suffix_array[rank[i] - 1]
-        max_len = min(n - i, n - prev_suffix)
-
-        while h < max_len and text_bytes[i + h] == text_bytes[prev_suffix + h]:
-            h += 1
-        
-        lcp_array[rank[i]] = h
-        h = max(0, h - 1)
-            
-    return lcp_array
-
-def find_all_occurrences_optimized(text: str, pattern: str) -> List[int]:
-    """Оптимизированный поиск всех вхождений паттерна"""
+def find_all_occurrences_fast(text: str, pattern: str) -> List[int]:
+    """Быстрый поиск всех вхождений"""
     positions = []
     start = 0
-    pattern_len = len(pattern)
-    text_len = len(text)
-
-    if pattern_len > 10:
-        while start <= text_len - pattern_len:
-            pos = text.find(pattern, start)
-            if pos == -1:
-                break
-            positions.append(pos)
-            start = pos + 1
-    else:
-        while start <= text_len - pattern_len:
-            pos = text.find(pattern, start)
-            if pos == -1:
-                break
-            positions.append(pos)
-            start = pos + 1
+    
+    while True:
+        pos = text.find(pattern, start)
+        if pos == -1:
+            break
+        positions.append(pos)
+        start = pos + 1
     
     return positions
 
-def find_patterns_hybrid_optimized(text: str, min_chars: int) -> Dict[str, List[int]]:
-    """Оптимизированный гибридный поиск паттернов"""
+def find_patterns_ultra_aggressive(text: str, min_chars: int) -> Dict[str, List[int]]:
+    """Ультра-агрессивный поиск паттернов с учетом min_chars"""
     patterns = {}
     n = len(text)
-    text_bytes = text.encode('utf-8')
     
-    if n > 5000:
-        try:
-            import pydivsufsort
-            suffix_array = pydivsufsort.divsufsort(text_bytes)
-            lcp_array = build_lcp_array_optimized(text_bytes, suffix_array)
-            
-            seen_patterns = set()
-            pattern_candidates = []
-            
-            for i in range(1, len(suffix_array)):
-                lcp = lcp_array[i]
-                if lcp >= max(min_chars // 2, 8):
-                    start_idx = suffix_array[i-1]
-                    if start_idx + lcp <= len(text_bytes):
-                        pattern_candidates.append((start_idx, lcp))
-            
-            pattern_candidates.sort(key=lambda x: x[1], reverse=True)
-            
-            for start_idx, lcp in pattern_candidates[:500]:
-                pattern_bytes = text_bytes[start_idx:start_idx + lcp]
-                try:
-                    pattern_str = pattern_bytes.decode('utf-8')
-                    if (pattern_str not in seen_patterns and 
-                        len(pattern_str.strip()) >= lcp * 0.7):
-                        seen_patterns.add(pattern_str)
-                        
-                        positions = find_all_occurrences_optimized(text, pattern_str)
-                        if len(positions) >= 2:
-                            patterns[pattern_str] = positions
-                            
-                        if len(patterns) > 200:
-                            break
-                            
-                except UnicodeDecodeError:
-                    continue
-            
-            # Освобождаем память явно
-            del suffix_array, lcp_array
-            
-        except ImportError:
-            pass  # Если pydivsufsort недоступен, пропускаем
-        except Exception:
-            pass  # Игнорируем ошибки суффиксного массива
+    # СТРОГО следуем min_chars - это минимальная длина для сжатия
+    actual_min_length = max(min_chars, 3)
     
-    # Стратегия 2: Оптимизированный поиск N-грамм
-    if len(patterns) < 100:  # Дополняем только если мало паттернов
-        # Адаптивные параметры в зависимости от размера текста
-        if n <= 2000:
-            max_length = min(n // 3, 30)
-            min_length = max(min_chars // 3, 5)
-        elif n <= 10000:
-            max_length = min(n // 4, 40)
-            min_length = max(min_chars // 2, 8)
-        else:
-            max_length = min(n // 5, 50)
-            min_length = max(min_chars // 2, 10)
+    # Адаптивные параметры
+    if n <= 2000:
+        max_length = min(n // 2, 100)
+        step_size = 1
+    elif n <= 20000:
+        max_length = min(n // 3, 200)
+        step_size = max(1, n // 15000)
+    else:
+        max_length = min(n // 4, 300)
+        step_size = max(1, n // 20000)
+    
+    # === СТРАТЕГИЯ 1: Поиск ОЧЕНЬ длинных паттернов (максимальный приоритет) ===
+    for length in range(max_length, max(actual_min_length, 30) - 1, -2):
+        if length > n // 2:
+            continue
+            
+        found_patterns = defaultdict(list)
+        current_step = min(step_size, max(1, length // 6))
         
-        # Начинаем с длинных подстрок
-        for length in range(max_length, min_length - 1, -2):  # Шаг 2 для скорости
+        for i in range(0, n - length + 1, current_step):
+            substring = text[i:i + length]
+            
+            # Очень мягкие фильтры для максимального поиска
+            if len(substring.strip()) >= length * 0.3:
+                found_patterns[substring].append(i)
+        
+        # Обрабатываем найденные кандидаты
+        for substring, sampled_pos in found_patterns.items():
+            if len(sampled_pos) >= 2 or (current_step > 1 and len(sampled_pos) >= 1):
+                
+                if current_step > 1:
+                    all_positions = find_all_occurrences_fast(text, substring)
+                else:
+                    all_positions = sampled_pos
+                
+                if len(all_positions) >= 2:
+                    patterns[substring] = all_positions
+        
+        # Если нашли достаточно длинных паттернов, можем остановиться
+        if len(patterns) >= 50:
+            break
+    
+    # === СТРАТЕГИЯ 2: Поиск паттернов средней длины ===
+    if len(patterns) < 200:
+        for length in range(min(max_length, actual_min_length * 3), actual_min_length - 1, -1):
             if length > n // 3:
                 continue
                 
-            substring_count = defaultdict(list)
+            found_patterns = defaultdict(list)
+            current_step = max(1, (n - length) // 8000)
             
-            # Умное семплирование
-            if n > 5000:
-                step = max(1, (n - length) // 3000)  # Более агрессивное семплирование
-            else:
-                step = 1
-            
-            # Собираем кандидатов
-            for i in range(0, n - length + 1, step):
+            for i in range(0, n - length + 1, current_step):
                 substring = text[i:i + length]
                 
-                # Фильтры качества
-                stripped = substring.strip()
-                if (len(stripped) >= length * 0.6 and  # Не слишком много пробелов
-                    not stripped.isspace() and        # Не только пробелы
-                    len(set(substring)) > 2):          # Достаточное разнообразие символов
-                    
-                    substring_count[substring].append(i)
+                # Более строгие фильтры для средних паттернов
+                if (len(substring.strip()) >= length * 0.4 and
+                    len(set(substring)) >= min(length // 3, 3)):
+                    found_patterns[substring].append(i)
             
-            # Находим точные позиции для семплированных паттернов
-            added_count = 0
-            for substring, sampled_positions in substring_count.items():
-                if len(sampled_positions) >= 2 or (step > 1 and len(sampled_positions) >= 1):
-                    # Если семплировали, найдем все точные вхождения
-                    if step > 1:
-                        all_positions = find_all_occurrences_optimized(text, substring)
+            for substring, positions in found_patterns.items():
+                min_reps = 3 if length < actual_min_length * 1.5 else 2
+                
+                if len(positions) >= min_reps or (current_step > 1 and len(positions) >= min_reps - 1):
+                    if current_step > 1:
+                        all_positions = find_all_occurrences_fast(text, substring)
                     else:
-                        all_positions = sampled_positions
+                        all_positions = positions
                     
-                    if len(all_positions) >= 2:
+                    if len(all_positions) >= min_reps:
                         patterns[substring] = all_positions
-                        added_count += 1
-                        
-                        # Ограничения для контроля производительности
-                        if added_count > 50:  # Не более 50 паттернов на длину
-                            break
-                        if len(patterns) > 300:  # Общее ограничение
-                            break
-            
-            if len(patterns) > 300 or added_count > 30:
-                break
     
-    # Стратегия 3: Оптимизированный поиск словесных паттернов
-    if len(patterns) < 200:  # Добавляем только если есть место
-        # Более эффективный поиск слов без регулярных выражений
-        words = []
-        current_word = []
+    # === СТРАТЕГИЯ 3: Поиск точно min_chars паттернов ===
+    if len(patterns) < 150:
+        length = actual_min_length
+        found_patterns = defaultdict(list)
+        current_step = max(1, (n - length) // 5000)
+        
+        for i in range(0, n - length + 1, current_step):
+            substring = text[i:i + length]
+            
+            # Еще более мягкие фильтры для min_chars
+            if (len(substring.strip()) >= length * 0.3 and
+                not substring.isspace()):
+                found_patterns[substring].append(i)
+        
+        for substring, positions in found_patterns.items():
+            if len(positions) >= 4 or (current_step > 1 and len(positions) >= 3):
+                if current_step > 1:
+                    all_positions = find_all_occurrences_fast(text, substring)
+                else:
+                    all_positions = positions
+                
+                if len(all_positions) >= 4:  # Требуем больше повторов для коротких
+                    patterns[substring] = all_positions
+    
+    # === СТРАТЕГИЯ 4: Поиск повторяющихся слов и фраз ===
+    if len(patterns) < 100 and actual_min_length <= 15:
+        # Ищем фразы из нескольких слов
+        words_and_spaces = []
+        current_token = []
         
         for char in text:
-            if char.isalnum():
-                current_word.append(char)
+            if char.isalnum() or char in "'-":
+                current_token.append(char)
             else:
-                if len(current_word) >= 4:
-                    word = ''.join(current_word)
-                    words.append(word)
-                current_word = []
+                if current_token:
+                    words_and_spaces.append(''.join(current_token))
+                    current_token = []
+                if char in ' \t\n':
+                    words_and_spaces.append(char)
         
-        # Добавляем последнее слово
-        if len(current_word) >= 4:
-            words.append(''.join(current_word))
+        if current_token:
+            words_and_spaces.append(''.join(current_token))
         
-        if words:
-            # Подсчет частот
-            word_counts = Counter(words)
+        # Создаем фразы разной длины
+        for phrase_len in range(6, 2, -1):  # От 6 слов до 3
+            phrase_positions = defaultdict(list)
             
-            # Топ слова с учетом частоты и длины
-            top_words = []
-            for word, count in word_counts.most_common():
-                if count >= 3 and len(word) >= 5:
-                    # Бонус за длину слова
-                    score = count * len(word)
-                    top_words.append((word, score))
-                if len(top_words) >= 20:
-                    break
-            
-            # Сортируем по скору
-            top_words.sort(key=lambda x: x[1], reverse=True)
-            
-            # Ищем позиции для топ слов
-            for word, _ in top_words[:10]:  # Ограничиваем до 10 слов
-                positions = []
-                start = 0
-                while True:
-                    pos = text.find(word, start)
-                    if pos == -1:
-                        break
-                    # Проверка границ слова
-                    is_word_boundary = True
-                    if pos > 0 and text[pos-1].isalnum():
-                        is_word_boundary = False
-                    if pos + len(word) < len(text) and text[pos + len(word)].isalnum():
-                        is_word_boundary = False
-                    
-                    if is_word_boundary:
-                        positions.append(pos)
-                    start = pos + 1
+            for i in range(len(words_and_spaces) - phrase_len + 1):
+                phrase_tokens = words_and_spaces[i:i + phrase_len]
+                phrase = ''.join(phrase_tokens)
                 
-                if len(positions) >= 2:
-                    patterns[word] = positions
+                if len(phrase) >= actual_min_length and len(phrase.strip()) >= actual_min_length * 0.7:
+                    # Находим позицию в исходном тексте
+                    pos = text.find(phrase)
+                    if pos != -1:
+                        phrase_positions[phrase].append(pos)
+            
+            for phrase, _ in phrase_positions.items():
+                all_positions = find_all_occurrences_fast(text, phrase)
+                if len(all_positions) >= 3:
+                    patterns[phrase] = all_positions
     
     return patterns
 
-def calculate_savings_accurate(pattern: str, positions: List[int], var_name_len: int) -> Tuple[float, List[int]]:
-    """Точное вычисление экономии с учетом всех факторов"""
+def calculate_savings_precise(pattern: str, positions: List[int], var_name_len: int) -> Tuple[float, List[int]]:
+    """Точное вычисление экономии с учетом реальной выгоды"""
     if len(positions) < 2:
         return 0, []
     
-    # Убираем перекрытия эффективно
-    sorted_positions = sorted(positions)
+    # Удаляем перекрытия максимально эффективно
+    sorted_positions = sorted(set(positions))
     non_overlapping = []
-    last_end = -1
     pattern_len = len(pattern)
+    last_end = -1
     
     for pos in sorted_positions:
         if pos >= last_end:
@@ -276,50 +209,71 @@ def calculate_savings_accurate(pattern: str, positions: List[int], var_name_len:
     if len(non_overlapping) < 2:
         return 0, []
     
-    # Улучшенная формула экономии
     replacements_count = len(non_overlapping)
     
-    # Экономия от замен
-    saved_chars = replacements_count * (pattern_len - var_name_len)
+    # Реальная экономия символов
+    chars_saved_per_replacement = pattern_len - var_name_len
+    total_chars_saved = replacements_count * chars_saved_per_replacement
     
-    # Затраты на словарь
-    dictionary_cost = var_name_len + pattern_len + 4
+    # Затраты на словарь (переменная + паттерн + разделители)
+    dictionary_overhead = var_name_len + pattern_len + 2
     
-    # Итоговая экономия
-    net_savings = saved_chars - dictionary_cost
+    # Чистая экономия
+    net_savings = total_chars_saved - dictionary_overhead
     
-    # Улучшенные бонусы
-    frequency_bonus = replacements_count * 0.7  # Увеличен бонус за частоту
-    length_bonus = min(pattern_len * 0.15, 8)   # Бонус за длину паттерна
+    # Система бонусов для поощрения хороших паттернов
+    frequency_multiplier = min(replacements_count * 0.8, 20)  # Бонус за частоту
+    length_multiplier = min(pattern_len * 0.3, 30)           # Бонус за длину
     
-    total_score = net_savings + frequency_bonus + length_bonus
+    # Дополнительные бонусы
+    if replacements_count >= 5:
+        frequency_multiplier *= 1.5
+    if replacements_count >= 10:
+        frequency_multiplier *= 1.8
     
-    return total_score, non_overlapping
+    if pattern_len >= 50:
+        length_multiplier *= 2.0
+    if pattern_len >= 100:
+        length_multiplier *= 3.0
+    
+    # Итоговый скор
+    final_score = net_savings + frequency_multiplier + length_multiplier
+    
+    return final_score, non_overlapping
 
 def compress_text_optimized(text: str, min_chars: int = 20) -> Tuple[str, List[List[str]]]:
-    """Оптимизированная версия с балансом скорости и сжатия"""
+    """Ультра-агрессивная версия сжатия с учетом min_chars"""
     if not isinstance(text, str) or not text:
         return text, []
     if not isinstance(min_chars, int) or min_chars < 1:
         min_chars = 20
 
     n = len(text)
-    if n < min_chars:
+    if n < min_chars * 2:  # Нужно хотя бы 2 повторения min_chars
         return text, []
 
-    # Находим все паттерны оптимизированным методом
-    all_patterns = find_patterns_hybrid_optimized(text, min_chars)
+    # Находим паттерны ультра-агрессивным методом
+    all_patterns = find_patterns_ultra_aggressive(text, min_chars)
     
     if not all_patterns:
         return text, []
     
-    # Оцениваем все паттерны
+    # Фильтруем паттерны по min_chars СТРОГО
+    filtered_patterns = {}
+    for pattern_str, positions in all_patterns.items():
+        if len(pattern_str) >= min_chars:  # СТРОГОЕ соблюдение min_chars
+            filtered_patterns[pattern_str] = positions
+    
+    if not filtered_patterns:
+        return text, []
+    
+    # Оцениваем отфильтрованные паттерны
     pattern_scores = []
     var_counter = 0
     
-    for pattern_str, positions in all_patterns.items():
+    for pattern_str, positions in filtered_patterns.items():
         var_name_len = 1 if var_counter < 10 else (1 if var_counter < 36 else 2)
-        score, valid_positions = calculate_savings_accurate(pattern_str, positions, var_name_len)
+        score, valid_positions = calculate_savings_precise(pattern_str, positions, var_name_len)
         
         if score > 0 and len(valid_positions) >= 2:
             pattern_scores.append((pattern_str, valid_positions, score))
@@ -328,12 +282,11 @@ def compress_text_optimized(text: str, min_chars: int = 20) -> Tuple[str, List[L
     if not pattern_scores:
         return text, []
     
-    # Сортируем по скору и ограничиваем для производительности
+    # Сортируем по скору (лучшие первыми)
     pattern_scores.sort(key=lambda x: x[2], reverse=True)
-    pattern_scores = pattern_scores[:150]  # Ограничиваем для скорости
     
-    # Жадный выбор с оптимизированной проверкой перекрытий
-    covered = [False] * n  # Используем bool список вместо bytearray
+    # Жадный алгоритм с максимальной эффективностью
+    covered = [False] * n
     replacements = []
     unzip_dictionary = []
     used_vars = set()
@@ -343,23 +296,20 @@ def compress_text_optimized(text: str, min_chars: int = 20) -> Tuple[str, List[L
         pattern_len = len(pattern_str)
         final_positions = []
         
-        # Оптимизированная проверка перекрытий
+        # Проверка перекрытий
         for pos in positions:
             end_pos = pos + pattern_len
             if end_pos <= n:
-                # Проверяем перекрытие только в нужном диапазоне
-                overlap = False
-                for i in range(pos, min(end_pos, n)):
-                    if covered[i]:
-                        overlap = True
-                        break
+                # Быстрая проверка перекрытия
+                has_overlap = any(covered[pos:end_pos])
                 
-                if not overlap:
+                if not has_overlap:
                     final_positions.append(pos)
         
-        # Принимаем паттерн с адаптивным порогом
-        min_replacements = 2 if score > 15 else 3
-        if len(final_positions) >= min_replacements:
+        # ОЧЕНЬ агрессивные критерии принятия
+        min_required = 2 if score > 20 else (2 if score > 10 else 3)
+        
+        if len(final_positions) >= min_required:
             var_name = generate_short_var_name(used_vars, var_counter)
             used_vars.add(var_name)
             var_counter += 1
@@ -376,7 +326,7 @@ def compress_text_optimized(text: str, min_chars: int = 20) -> Tuple[str, List[L
     if not replacements:
         return text, []
     
-    # Собираем финальный текст
+    # Собираем результат
     replacements.sort()
     result_parts = []
     current_pos = 0
@@ -393,7 +343,6 @@ def compress_text_optimized(text: str, min_chars: int = 20) -> Tuple[str, List[L
     compressed_text = "".join(result_parts)
     return compressed_text, unzip_dictionary
 
-    
 if __name__ == "__main__":
     def calculate_effective_length(compressed_text, unzip_dictionary):
         dictionary_length = sum(len(var) + len(val) for var, val in unzip_dictionary)
@@ -404,6 +353,7 @@ if __name__ == "__main__":
         print(f"--- {name} ---")
         original_length = len(text)
         print(f"Original Length: {original_length} characters")
+        print(f"Min chars requirement: {min_chars}")
 
         start_time = time.perf_counter()
         compressed_opt, dict_opt_raw = compress_text_optimized(text, min_chars)
@@ -412,6 +362,9 @@ if __name__ == "__main__":
         effective_opt = calculate_effective_length(compressed_opt, dict_opt_raw)
 
         print(f"Optimized - Length: {effective_opt}, Time: {time_opt:.6f}s, Ratio: {original_length/effective_opt:.2f}x")
+        print(f"Dictionary entries: {len(dict_opt_raw)}")
+        if dict_opt_raw:
+            print(f"Sample patterns: {[f'{k}: {len(v)} chars' for k, v in dict_opt_raw[:3]]}")
         
         print("\n" + "="*50 + "\n")
 
