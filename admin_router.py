@@ -51,6 +51,11 @@ class ReformatMessageSettingPayload(BaseModel):
 # Путь к файлу настроек
 SETTINGS_FILE_PATH = "configs/settings.json"
 
+class SmartContextZipperSettingPayload(BaseModel):
+    model_id: str
+    module_name: str
+    is_smart_context_zipper_enabled: bool
+
 def _load_settings() -> Dict[str, Any]:
     """Загружает все настройки из файла settings.json."""
     if not os.path.exists(SETTINGS_FILE_PATH):
@@ -94,6 +99,28 @@ def set_reformat_setting(module_name: str, model_id: str, is_enabled: bool):
             del mod_settings[model_id]
             if not mod_settings:
                 del settings["reformat_messages_settings"][module_name]
+    _save_settings(settings)
+
+def get_smart_context_zipper_settings() -> Dict[str, Dict[str, bool]]:
+    """Получает настройки smart_context_zipper для всех моделей."""
+    settings = _load_settings()
+    return settings.get("smart_context_zipper_settings", {})
+
+def set_smart_context_zipper_setting(module_name: str, model_id: str, is_enabled: bool):
+    """Устанавливает или удаляет настройку smart_context_zipper для конкретной модели."""
+    settings = _load_settings()
+    if "smart_context_zipper_settings" not in settings:
+        settings["smart_context_zipper_settings"] = {}
+    if is_enabled:
+        if module_name not in settings["smart_context_zipper_settings"]:
+            settings["smart_context_zipper_settings"][module_name] = {}
+        settings["smart_context_zipper_settings"][module_name][model_id] = True
+    else:
+        mod_settings = settings["smart_context_zipper_settings"].get(module_name)
+        if mod_settings and model_id in mod_settings:
+            del mod_settings[model_id]
+            if not mod_settings:
+                del settings["smart_context_zipper_settings"][module_name]
     _save_settings(settings)
 
 
