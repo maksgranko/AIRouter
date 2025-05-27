@@ -1,1 +1,1 @@
-pip install fastapi uvicorn openai httpx httpx-socks requests[socks] jinja2 python-multipart dotenv
+pip install fastapi uvicorn openai httpx httpx-socks requests[socks] jinja2 python-multipart dotenv tiktoken Levenshtein pydivsufsort
