@@ -10,7 +10,7 @@ from fastapi import HTTPException
 import json
 
 from handlers.misc.one_messager import reformat_messages
-from admin_router import get_reformat_settings
+from admin_router import get_reformat_settings, get_smart_context_zipper_settings
 from handlers.misc.libs.tokenizer.main import get_token_count
 from handlers.misc.s200_handler import check_string_for_errors,FilteredStreamContentException
 
@@ -349,14 +349,17 @@ class OpenAICompatModule(BaseModule):
         payload_to_send["model"] = actual_model_name
 
         reformat_settings = get_reformat_settings()
+        smart_context_settings = get_smart_context_zipper_settings()
         print(self.get_name() + " " + instance_name)
         module_reformat_settings = reformat_settings.get(instance_name, {})
-        
+        module_scz_settings = smart_context_settings.get(instance_name, {})
+
         if module_reformat_settings.get(model_identifier, False):
             logger.warning(f"Reformat messages enabled for model '{actual_model_name}' in module '{self.get_name()}'. Applying reformat_messages.")
             if "messages" in payload_to_send:
                 messages_json_string = json.dumps(payload_to_send, ensure_ascii=False)
-                reformatted_json_string = await reformat_messages(messages_json_string)
+                use_zipper = bool(module_scz_settings.get(model_identifier, False))
+                reformatted_json_string = await reformat_messages(messages_json_string, smart_context_zipper=use_zipper)
                 reformatted_data = json.loads(reformatted_json_string)
                 payload_to_send["messages"] = reformatted_data.get("messages", [])
             else:
