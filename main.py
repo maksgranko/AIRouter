@@ -18,7 +18,7 @@ import admin_router
 import logging
 
 open_browser_on_save = False
-logging_type = logging.DEBUG
+logging_type = logging.INFO
 
 logging.basicConfig(level=logging_type, format='%(levelname)s:%(name)s:%(asctime)s:%(message)s')
 logger = logging.getLogger(__name__)
@@ -39,7 +39,7 @@ output_oaic_module_logger.setLevel(logging_type)
 
 load_dotenv() 
 
-APP_VERSION = "1.2.1"
+APP_VERSION = "1.2.2"
 app = FastAPI()
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
