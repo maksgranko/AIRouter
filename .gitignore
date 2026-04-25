@@ -12,3 +12,8 @@
 /handlers/misc/libs/text_shrinker/__pycache__
 /tests/handlers/misc/libs/tokenizer/__pycache__
 /handlers/misc/libs/string_comparer/__pycache__
+/configs
+/tests/api/__pycache__
+/tests/unit/__pycache__
+/tests/modules/__pycache__
+/tests/smoke/__pycache__
