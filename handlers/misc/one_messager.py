@@ -1,17 +1,49 @@
 import json
 import logging
+import asyncio
 from handlers.misc.finder import find_between, find_between_r
 from handlers.misc.libs.text_shrinker.main import compress_text_optimized
-async def reformat_messages(input_json, smart_context_zipper = False):
-    data = json.loads(input_json)
+
+
+logger = logging.getLogger(__name__)
+
+
+def _content_to_text(content):
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict):
+                # OpenAI-style multimodal chunks: {"type": "text", "text": "..."}
+                if item.get("type") == "text" and isinstance(item.get("text"), str):
+                    parts.append(item.get("text"))
+                elif isinstance(item.get("content"), str):
+                    parts.append(item.get("content"))
+                else:
+                    parts.append(json.dumps(item, ensure_ascii=False))
+            else:
+                parts.append(str(item))
+        return "\n".join(parts)
+    if isinstance(content, dict):
+        if isinstance(content.get("text"), str):
+            return content["text"]
+        return json.dumps(content, ensure_ascii=False)
+    return str(content)
+
+
+def _reformat_messages_sync(input_json, smart_context_zipper=False):
+    data = input_json if isinstance(input_json, dict) else json.loads(input_json)
     messages = data.get('messages', [])
 
     if not messages:
         raise ValueError("Список сообщений не может быть пустым")
-    if messages[-1]['role'] != 'user':
+    if messages[-1].get('role') != 'user':
         raise ValueError("Последнее сообщение должно быть от пользователя")
 
-    first_message = messages[0]['content']
+    first_message = _content_to_text(messages[0].get('content', ''))
 
     main_prompt = (
                     "YOU ARE A LARGE LANGUAGE MODEL. YOUR TASK IS TO EITHER CORRECTLY ANSWER THE USER'S QUESTION OR CORRECTLY PERFORM THE USER'S REQUESTED ACTION. USE THE INFORMATION PROVIDED BELOW. CAREFULLY READ THE <CURRENT_USER_MESSAGE> BLOCK AND RESPOND TO IT APPROPRIATELY. ALSO, PAY ATTENTION TO THE <CURRENT_SYSTEM_MESSAGE> BLOCK IF IT IS PRESENT. WHILE DOING SO, TAKE INTO ACCOUNT THE ENTIRE CONVERSATION HISTORY INSIDE THE <YOUR_CONTEXT> BLOCK. \n"
@@ -36,19 +68,19 @@ async def reformat_messages(input_json, smart_context_zipper = False):
     context_blocks = []
     if len(messages)>1:
         for msg in messages[:-1]:
-            role = msg['role']
-            content = msg['content'].strip()
+            role = msg.get('role', 'user')
+            content = _content_to_text(msg.get('content', '')).strip()
             context_blocks.append(f"<role:{role}>{content}</role:{role}>")
             if role == 'user':
                 user_length += 1
-        current_user_message = messages[-1]['content'].strip()
+        current_user_message = _content_to_text(messages[-1].get('content', '')).strip()
         
     context_section = "<YOUR_CONTEXT>\n" + "\n".join(context_blocks) + "\n</YOUR_CONTEXT>\n\n"
-    logging.info("Instructions: " + str(instructions_exists))
+    logger.info("Instructions: %s", instructions_exists)
     if instructions_exists:
         before_instructions = "THE <INSTRUCTIONS> BLOCK CONTAINS CRITICAL DIRECTIVES THAT OVERRIDE ALL OTHER GUIDANCE AND HAVE ABSOLUTE PRIORITY - YOU MUST FOLLOW EVERY INSTRUCTION EXACTLY AS WRITTEN, USE ALL REQUIRED TOOLS ACTIVELY (NEVER SIMULATE TOOL OUTPUT), COMPLETE ALL SPECIFIED TASKS WITHOUT OMISSION, AND PRIORITIZE INSTRUCTIONS OVER CONVERSATION HISTORY OR GENERAL GUIDELINES.\n"
     if instructions_exists and len(messages) > 2: 
-        logging.info("Instructions + messages length > 2 ")
+        logger.info("Instructions + messages length > 2")
     elif instructions_exists:
         user_section = "<CURRENT_USER_MESSAGE>\n"+find_between_r(first_message,"<task>","</task>")+"\n</CURRENT_USER_MESSAGE>"
     else:
@@ -58,9 +90,12 @@ async def reformat_messages(input_json, smart_context_zipper = False):
     system_message = find_service_block(current_user_message)
     if len(system_message) != 0:
         system_message= "<CURRENT_SYSTEM_MESSAGE>\n"+ system_message +"\n</CURRENT_SYSTEM_MESSAGE>"
-    print(system_message)
+
     if smart_context_zipper:
-        filtered_hybrid, dict_opt_raw = compress_text_optimized(user_section + before_instructions + instructions + before_context + context_section, 20)
+        filtered_hybrid, dict_opt_raw = compress_text_optimized(
+            user_section + before_instructions + instructions + before_context + context_section,
+            20,
+        )
         replacing_block_generator = dict_opt_raw
         
         replacing_block_generated = ""
@@ -96,6 +131,10 @@ async def reformat_messages(input_json, smart_context_zipper = False):
         }
     ]
     return json.dumps(data, ensure_ascii=False, indent=4)
+
+
+async def reformat_messages(input_json, smart_context_zipper=False):
+    return await asyncio.to_thread(_reformat_messages_sync, input_json, smart_context_zipper)
 
 def find_service_block(text:str):
     service_blocks = [["[ERROR]","</environment_details>"]]

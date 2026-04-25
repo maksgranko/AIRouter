@@ -189,7 +189,8 @@ class OpenAIChatModule(BaseModule):
         if module_reformat_settings.get(payload_to_send.get("model", ""), False):
             logger.debug(f"Reformat messages enabled for model '{payload_to_send.get('model')}' in module '{self.get_name()}'. Applying reformat_messages.")
             if "messages" in payload_to_send:
-                payload_to_send["messages"] = [{"role": "user", "content": reformat_messages(payload_to_send["messages"])}]
+                reformatted_json = await reformat_messages(json.dumps(payload_to_send, ensure_ascii=False))
+                payload_to_send = json.loads(reformatted_json)
             else:
                 logger.warning(f"Reformat messages enabled for model '{payload_to_send.get('model')}', but no 'messages' found in payload.")
 

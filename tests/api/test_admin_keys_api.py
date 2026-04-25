@@ -1,6 +1,3 @@
-import pytest
-
-
 async def test_add_and_delete_service_key(async_client, admin_basic_auth_header):
     add_response = await async_client.post(
         "/api/admin/ui/keys/service/openai",
@@ -35,7 +32,6 @@ async def test_generate_and_delete_airouter_key(async_client, admin_basic_auth_h
     assert delete_response.status_code == 200
 
 
-@pytest.mark.xfail(reason="ApiKeyManager has no update_key method", strict=False)
 async def test_patch_service_key(async_client, admin_basic_auth_header):
     await async_client.post(
         "/api/admin/ui/keys/service/openai",

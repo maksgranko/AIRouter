@@ -125,6 +125,13 @@ python -m uvicorn main:app --reload
 
 После запуска сервер будет доступен по адресу `http://127.0.0.1:8000`.
 
+## HTTPS (Let's Encrypt)
+
+Для production-развёртывания по HTTPS используйте отдельный reverse proxy.
+
+- Пошаговая инструкция: `docs/DEPLOY_HTTPS.md`
+- Быстрый скрипт Nginx + certbot: `scripts/setup_https_nginx_certbot.sh`
+
 ## Использование
 
 ### API Роутера (для AI-запросов)

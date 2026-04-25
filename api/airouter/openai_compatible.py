@@ -6,8 +6,6 @@ from typing import AsyncGenerator, Dict, Any, Optional
 from fastapi import APIRouter, Form, Request, UploadFile, HTTPException
 from fastapi.responses import StreamingResponse
 
-from handlers.misc.one_messager import reformat_messages
-
 # Получаем глобальный registry и logger из app.state, если они там есть,
 # или импортируем напрямую, если это возможно и безопасно.
 # Для этого эндпоинты должны принимать Request и получать доступ к app.state.
@@ -37,7 +35,7 @@ def get_module(request: Request, request_data: dict):
     # Попытка 2: обработка префикса для нового OpenAICompatModule (например, "openai_instance1/gpt-4")
     # Новый модуль будет зарегистрирован под именем "openai_compat" (или аналогичным)
     # Имя модели в запросе будет "openai_INSTANCENAME/ACTUAL_MODEL_NAME"
-    if model_identifier.startswith("openai_") and '/' in model_identifier:
+    if (model_identifier.startswith("openai_") and '/' in model_identifier) or model_identifier.startswith("OAIC/"):
         try:
             # Все запросы к openai_INSTANCENAME/... должны идти к одному модулю OpenAICompatModule
             module = registry.get("OAIC") # Предполагаемое имя регистрации нового модуля
@@ -111,14 +109,14 @@ async def chat_completions(request: Request):
 @router.post("/v1/completions")
 async def completions(request: Request):
     body = await request.json()
-    logger.debug(f"Received /v1/completions request body: " + reformat_messages(body))
+    logger.debug("Received /v1/completions request body")
     module = get_module(request, body)
     return await module.completion(body)
 
 @router.post("/v1/embeddings")
 async def embeddings(request: Request):
     body = await request.json()
-    logger.debug(f"Received /v1/embeddings request body: " + reformat_messages(body))
+    logger.debug("Received /v1/embeddings request body")
     module = get_module(request, body)
     return await module.embeddings(body)
 
@@ -162,7 +160,7 @@ async def retrieve_model(model_id: str, request: Request): # Добавляем 
     # Попытка 2: model_id содержит префикс инстанса/сервиса (например, "openai_instance1/gpt-4" или "gemini/gemini-pro")
     if '/' in model_id:
         service_or_instance_prefix = model_id.split('/')[0]
-        module_to_try_name = "OAIC" if service_or_instance_prefix.startswith("openai_") else service_or_instance_prefix
+        module_to_try_name = "OAIC" if service_or_instance_prefix.startswith("openai_") or service_or_instance_prefix == "OAIC" else service_or_instance_prefix
         
         try:
             module = registry.get(module_to_try_name)

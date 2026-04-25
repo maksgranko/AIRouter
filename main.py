@@ -1,6 +1,7 @@
 import os
 import webbrowser
 import json
+from copy import deepcopy
 from typing import Optional
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, HTTPException
@@ -56,58 +57,145 @@ PROXIES_FILE = os.path.join(CONFIG_DIR, "proxies.json")
 OPENAI_INSTANCES_FILE = os.path.join(CONFIG_DIR, "openai_instances.json")
 
 def ensure_config_files_exist():
-    """Проверяет наличие папки configs и файлов конфигурации, создает их при необходимости."""
+    """Проверяет/нормализует файлы конфигурации и заполняет отсутствующие значения по умолчанию."""
     if not os.path.exists(CONFIG_DIR):
         os.makedirs(CONFIG_DIR)
         print(f"Created directory: {CONFIG_DIR}")
 
+    default_settings = {
+        "proxy_settings": {
+            "use_proxies": True,
+            "rotation_mode": "once",
+            "force_proxy_rotation_after_request": False,
+            "select_random_proxy_each_request": False
+        },
+        "module_statuses": {"openai": True, "gemini": True, "OAIC": True},
+        "require_airouter_api_key": False,
+        "module_proxy_usage": {"openai": True, "gemini": True},
+        "reformat_messages_settings": {},
+        "smart_context_zipper_settings": {}
+    }
+
     default_files_content = {
         OPENAI_KEYS_FILE: [],
         GEMINI_KEYS_FILE: [],
+        AIROUTER_KEYS_FILE: [],
         PROXIES_FILE: [],
-        SETTINGS_FILE: {
-            "proxy_settings": {
-                "use_proxies": True, 
-                "rotation_mode": "once",
-                "force_proxy_rotation_after_request": False, 
-                "select_random_proxy_each_request": False
-            },
-            "module_statuses": {"openai": True, "gemini": True, "OAIC": True},
-            "require_airouter_api_key": False 
-        }
+        OPENAI_INSTANCES_FILE: [],
+        SETTINGS_FILE: default_settings
     }
 
-    if not os.path.exists(AIROUTER_KEYS_FILE):
+    def _save_json(file_path: str, payload) -> None:
         try:
-            with open(AIROUTER_KEYS_FILE, 'w') as f:
-                json.dump([], f)
-            print(f"Created default config file: {AIROUTER_KEYS_FILE}")
+            with open(file_path, 'w') as f:
+                json.dump(payload, f, indent=2)
         except Exception as e:
-            print(f"Error creating default config file {AIROUTER_KEYS_FILE}: {e}")
+            print(f"Error creating default config file {file_path}: {e}")
+
+    def _merge_dict_defaults(current: dict, defaults: dict) -> tuple[dict, bool]:
+        changed = False
+        merged = deepcopy(current)
+        for key, default_value in defaults.items():
+            if key not in merged:
+                merged[key] = deepcopy(default_value)
+                changed = True
+                continue
+            if isinstance(default_value, dict) and isinstance(merged.get(key), dict):
+                nested_merged, nested_changed = _merge_dict_defaults(merged[key], default_value)
+                if nested_changed:
+                    merged[key] = nested_merged
+                    changed = True
+        return merged, changed
 
     for file_path, default_content in default_files_content.items():
         if not os.path.exists(file_path):
-            try:
-                with open(file_path, 'w') as f:
-                    json.dump(default_content, f, indent=2)
-                print(f"Created default config file: {file_path}")
-            except Exception as e:
-                print(f"Error creating default config file {file_path}: {e}")
+            _save_json(file_path, default_content)
+            print(f"Created default config file: {file_path}")
+            continue
+
+        try:
+            with open(file_path, 'r') as f:
+                loaded = json.load(f)
+        except Exception:
+            _save_json(file_path, default_content)
+            logger.warning(f"Config file '{file_path}' is invalid. Recreated with defaults.")
+            continue
+
+        if isinstance(default_content, dict):
+            if not isinstance(loaded, dict):
+                _save_json(file_path, default_content)
+                logger.warning(f"Config file '{file_path}' has invalid format. Recreated with defaults.")
+                continue
+            merged, changed = _merge_dict_defaults(loaded, default_content)
+            if changed:
+                _save_json(file_path, merged)
+                logger.info(f"Config file '{file_path}' was normalized with missing defaults.")
+        elif isinstance(default_content, list):
+            if not isinstance(loaded, list):
+                _save_json(file_path, default_content)
+                logger.warning(f"Config file '{file_path}' has invalid format. Recreated with defaults.")
 
 ensure_config_files_exist()
 
+
+def _build_key_manager() -> ApiKeyManager:
+    return ApiKeyManager({
+        "openai": OPENAI_KEYS_FILE,
+        "gemini": GEMINI_KEYS_FILE
+    })
+
+
+def _build_proxy_manager() -> ProxyManager:
+    return ProxyManager(
+        proxy_file_path=PROXIES_FILE,
+        settings_file_path=SETTINGS_FILE
+    )
+
+
+def _build_airouter_key_manager() -> AIRouterApiKeyManager:
+    return AIRouterApiKeyManager()
+
+
+def _register_available_modules(
+    target_registry: ModuleRegistry,
+    km: ApiKeyManager,
+    pm: ProxyManager,
+    oaic_instances: list,
+):
+    if km.get_key("openai"):
+        target_registry.register(OpenAIChatModule(
+            api_key_manager=km,
+            proxy_manager=pm,
+            settings_file_path=SETTINGS_FILE,
+            service_name="openai"
+        ))
+    else:
+        print("Warning: No OpenAI API keys found. OpenAI module will not be registered.")
+
+    if km.get_key("gemini"):
+        target_registry.register(GeminiChatModule(
+            api_key_manager=km,
+            proxy_manager=pm,
+            settings_file_path=SETTINGS_FILE,
+            service_name="gemini"
+        ))
+    else:
+        print("Warning: No Gemini API keys found. Gemini module will not be registered.")
+
+    if oaic_instances:
+        target_registry.register(OpenAICompatModule(
+            instances_config=oaic_instances,
+            proxy_manager=pm,
+            settings_file_path=SETTINGS_FILE,
+        ))
+    else:
+        print("Warning: No OpenAI Compatible instances configured. OpenAI Compatible module will not be registered.")
+
+
 registry = ModuleRegistry(settings_file_path=SETTINGS_FILE)
-
-key_manager = ApiKeyManager({
-    "openai": OPENAI_KEYS_FILE,
-    "gemini": GEMINI_KEYS_FILE
-})
-
-proxy_manager = ProxyManager( 
-    proxy_file_path=PROXIES_FILE,
-    settings_file_path=SETTINGS_FILE
-)
-airouter_key_manager = AIRouterApiKeyManager()
+key_manager = _build_key_manager()
+proxy_manager = _build_proxy_manager()
+airouter_key_manager = _build_airouter_key_manager()
 
 
 def load_openai_instances_config(path: str) -> list:
@@ -123,12 +211,92 @@ def load_openai_instances_config(path: str) -> list:
 
 openai_instances_config = load_openai_instances_config(OPENAI_INSTANCES_FILE)
 
+
+def normalize_module_statuses_for_availability(registry_obj: ModuleRegistry):
+    """Отключает в settings.json модули, которые недоступны по конфигу/ключам."""
+    availability = {
+        "openai": bool(key_manager.get_key("openai", peek=True)),
+        "gemini": bool(key_manager.get_key("gemini", peek=True)),
+        "OAIC": bool(openai_instances_config),
+    }
+
+    try:
+        settings_data = {}
+        if os.path.exists(SETTINGS_FILE):
+            with open(SETTINGS_FILE, 'r') as f:
+                settings_data = json.load(f)
+
+        statuses = settings_data.get("module_statuses", {})
+        if not isinstance(statuses, dict):
+            statuses = {}
+
+        changed = False
+        for module_name, is_available in availability.items():
+            if module_name not in statuses:
+                statuses[module_name] = is_available
+                changed = True
+            elif not is_available and statuses.get(module_name):
+                statuses[module_name] = False
+                changed = True
+
+        settings_data["module_statuses"] = statuses
+        if changed:
+            with open(SETTINGS_FILE, 'w') as f:
+                json.dump(settings_data, f, indent=2)
+            logger.info("Module statuses normalized based on module availability.")
+
+        registry_obj._module_active_status.update(statuses)
+    except Exception as e:
+        logger.warning(f"Could not normalize module statuses: {e}")
+
 app.state.key_manager = key_manager
 app.state.proxy_manager = proxy_manager
 app.state.module_registry = registry
 app.state.airouter_key_manager = airouter_key_manager
 app.state.settings_file_path = SETTINGS_FILE
 app.state.app_version = APP_VERSION
+
+normalize_module_statuses_for_availability(registry)
+_register_available_modules(registry, key_manager, proxy_manager, openai_instances_config)
+
+
+def reload_runtime_modules() -> dict:
+    """Полностью пересоздает runtime-состояние модулей без рестарта процесса."""
+    global registry, key_manager, proxy_manager, airouter_key_manager, openai_instances_config
+
+    ensure_config_files_exist()
+
+    new_registry = ModuleRegistry(settings_file_path=SETTINGS_FILE)
+    new_key_manager = _build_key_manager()
+    new_proxy_manager = _build_proxy_manager()
+    new_airouter_key_manager = _build_airouter_key_manager()
+    new_openai_instances_config = load_openai_instances_config(OPENAI_INSTANCES_FILE)
+
+    key_manager = new_key_manager
+    proxy_manager = new_proxy_manager
+    airouter_key_manager = new_airouter_key_manager
+    openai_instances_config = new_openai_instances_config
+    registry = new_registry
+
+    normalize_module_statuses_for_availability(registry)
+    _register_available_modules(registry, key_manager, proxy_manager, openai_instances_config)
+
+    app.state.key_manager = key_manager
+    app.state.proxy_manager = proxy_manager
+    app.state.module_registry = registry
+    app.state.airouter_key_manager = airouter_key_manager
+
+    return {
+        "registered_modules": list(registry.get_all_module_statuses().keys()),
+        "active_modules": [mod.get_name() for mod in registry.all_active_modules()],
+        "openai_keys_count": len(key_manager.api_keys.get("openai", [])),
+        "gemini_keys_count": len(key_manager.api_keys.get("gemini", [])),
+        "oaic_instances_count": len(openai_instances_config),
+        "proxies_count": len(proxy_manager.proxies),
+    }
+
+
+app.state.reload_runtime_modules = reload_runtime_modules
 
 
 
@@ -184,35 +352,6 @@ async def check_airouter_api_key(request: Request, call_next):
 
     response = await call_next(request)
     return response
-
-if key_manager.get_key("openai"): 
-    registry.register(OpenAIChatModule(
-        api_key_manager=key_manager, 
-        proxy_manager=proxy_manager,
-        settings_file_path=SETTINGS_FILE,
-        service_name="openai"
-    ))
-else:
-    print("Warning: No OpenAI API keys found. OpenAI module will not be registered.")
-
-if key_manager.get_key("gemini"):
-    registry.register(GeminiChatModule(
-        api_key_manager=key_manager, 
-        proxy_manager=proxy_manager,
-        settings_file_path=SETTINGS_FILE,
-        service_name="gemini"
-    ))
-else:
-    print("Warning: No Gemini API keys found. Gemini module will not be registered.")
-
-if openai_instances_config:
-     registry.register(OpenAICompatModule(
-         instances_config=openai_instances_config,
-         proxy_manager=proxy_manager,
-         settings_file_path=SETTINGS_FILE,
-     ))
-else:
-    print("Warning: No OpenAI Compatible instances configured. OpenAI Compatible module will not be registered.")
 
 try:
     if(open_browser_on_save): 

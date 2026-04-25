@@ -522,11 +522,12 @@ class GeminiChatModule(BaseModule):
         if module_reformat_settings.get(model_name_for_response, False):
             logger.warning(f"Reformat messages enabled for model '{model_name_for_response}' in module '{self.get_name()}'. Applying reformat_messages.")
             if messages_to_process:
-                # reformat_messages ожидает список сообщений и возвращает объединенную строку
-                # Gemini API ожидает список объектов contents, каждый с role и parts
-                # Поэтому мы преобразуем объединенную строку в одно сообщение пользователя
-                reformatted_content = reformat_messages(messages_to_process)
-                messages_to_process = [{"role": "user", "content": reformatted_content}]
+                payload_for_reformat = {
+                    "messages": messages_to_process
+                }
+                reformatted_json = await reformat_messages(json.dumps(payload_for_reformat, ensure_ascii=False))
+                reformatted_payload = json.loads(reformatted_json)
+                messages_to_process = reformatted_payload.get("messages", messages_to_process)
             else:
                 logger.warning(f"Reformat messages enabled for model '{model_name_for_response}', but no 'messages' found in payload.")
 

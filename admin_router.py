@@ -101,6 +101,11 @@ def set_reformat_setting(module_name: str, model_id: str, is_enabled: bool):
                 del settings["reformat_messages_settings"][module_name]
     _save_settings(settings)
 
+    # SmartContextZipper зависит от reformat-пайплайна.
+    # Если reformat выключен, принудительно выключаем zipper для этой же модели.
+    if not is_enabled:
+        set_smart_context_zipper_setting(module_name, model_id, False)
+
 def get_smart_context_zipper_settings() -> Dict[str, Dict[str, bool]]:
     """Получает настройки smart_context_zipper для всех моделей."""
     settings = _load_settings()
@@ -111,6 +116,16 @@ def set_smart_context_zipper_setting(module_name: str, model_id: str, is_enabled
     settings = _load_settings()
     if "smart_context_zipper_settings" not in settings:
         settings["smart_context_zipper_settings"] = {}
+
+    # Включенный zipper без reformat не применяется в пайплайне,
+    # поэтому при включении zipper включаем и reformat для этой модели.
+    if is_enabled:
+        if "reformat_messages_settings" not in settings:
+            settings["reformat_messages_settings"] = {}
+        if module_name not in settings["reformat_messages_settings"]:
+            settings["reformat_messages_settings"][module_name] = {}
+        settings["reformat_messages_settings"][module_name][model_id] = True
+
     if is_enabled:
         if module_name not in settings["smart_context_zipper_settings"]:
             settings["smart_context_zipper_settings"][module_name] = {}
@@ -211,7 +226,7 @@ async def admin_dashboard_view(request: Request, username: str = Depends(get_cur
         "username": username,
         "app_version": request.app.state.app_version
     }
-    return templates.TemplateResponse("admin_dashboard.html", context)
+    return templates.TemplateResponse(request, "admin_dashboard.html", context)
 
 @router.get("/help", name="admin_help")
 async def admin_help_view(request: Request, username: str = Depends(get_current_username)):
@@ -225,7 +240,7 @@ async def admin_help_view(request: Request, username: str = Depends(get_current_
         "proxies_file": proxy_manager.proxy_file_path,
         "app_version": request.app.state.app_version
     }
-    return templates.TemplateResponse("admin_help.html", context)
+    return templates.TemplateResponse(request, "admin_help.html", context)
 
 # Глобальные переменные для кэширования моделей
 _cached_models_data: Optional[List[Dict[str, Any]]] = None
@@ -302,4 +317,4 @@ async def admin_models_view_page(request: Request, username: str = Depends(get_c
         "error_message": _cached_models_error,
         "app_version": request.app.state.app_version
     }
-    return templates.TemplateResponse("admin_models.html", context)
+    return templates.TemplateResponse(request, "admin_models.html", context)

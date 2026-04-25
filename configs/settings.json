@@ -1,2 +1,20 @@
 {
+  "proxy_settings": {
+    "use_proxies": true,
+    "rotation_mode": "once",
+    "force_proxy_rotation_after_request": false,
+    "select_random_proxy_each_request": false
+  },
+  "module_statuses": {
+    "openai": false,
+    "gemini": false,
+    "OAIC": true
+  },
+  "require_airouter_api_key": false,
+  "module_proxy_usage": {
+    "openai": true,
+    "gemini": true
+  },
+  "reformat_messages_settings": {},
+  "smart_context_zipper_settings": {}
 }

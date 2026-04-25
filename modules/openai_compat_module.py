@@ -21,7 +21,7 @@ class OpenAICompatModule(BaseModule):
 
     @staticmethod
     def parse_instance_and_model_id(model_identifier: str):
-        """Парсер для id вида OAIC/{instance}/{provider_path}."""
+        """Парсер для id вида OAIC/{instance}/{provider_path} или openai_{instance}/{provider_path}."""
         if not isinstance(model_identifier, str):
             return None, None
         if model_identifier.startswith("OAIC/"):
@@ -30,6 +30,16 @@ class OpenAICompatModule(BaseModule):
                 return None, None
             instance = parts[1]
             provider_model_path = parts[2]
+            return instance, provider_model_path
+        if model_identifier.startswith("openai_") and "/" in model_identifier:
+            instance_and_rest = model_identifier[len("openai_"):]
+            parts = instance_and_rest.split("/", 1)
+            if len(parts) < 2:
+                return None, None
+            instance = parts[0]
+            provider_model_path = parts[1]
+            if not instance or not provider_model_path:
+                return None, None
             return instance, provider_model_path
         return None, None
 
@@ -70,11 +80,182 @@ class OpenAICompatModule(BaseModule):
         return None
 
     def _get_instance_config(self, instance_name: str) -> Optional[Dict[str, Any]]:
-        logger.info(self.instances_config)
         for conf in self.instances_config:
             if conf["name"] == instance_name and conf.get("enabled", True):
                 return conf
         return None
+
+    def _get_instance_config_any_state(self, instance_name: str) -> Optional[Dict[str, Any]]:
+        for conf in self.instances_config:
+            if conf.get("name") == instance_name:
+                return conf
+        return None
+
+    @staticmethod
+    def _parse_target_reference(reference: Any, default_instance: str):
+        if not isinstance(reference, str) or not reference.strip():
+            return None, None
+        normalized = reference.strip()
+        parsed_instance, parsed_model = OpenAICompatModule.parse_instance_and_model_id(normalized)
+        if parsed_instance and parsed_model:
+            return parsed_instance, parsed_model
+        if "/" in normalized:
+            parts = normalized.split("/", 1)
+            if len(parts) == 2 and parts[0] and parts[1]:
+                return parts[0], parts[1]
+            return None, None
+        return default_instance, normalized
+
+    def _resolve_instance_and_model(self, instance_name: str, model_name: str):
+        current_instance = instance_name
+        current_model = model_name
+        visited = {(current_instance, current_model)}
+        max_hops = 12
+
+        for _ in range(max_hops):
+            instance_conf = self._get_instance_config_any_state(current_instance)
+            if not instance_conf:
+                raise HTTPException(status_code=400, detail=f"Instance '{current_instance}' not found.")
+
+            redirects = instance_conf.get("model_redirects")
+            aliases = instance_conf.get("model_aliases")
+            if not isinstance(redirects, dict):
+                redirects = {}
+            if not isinstance(aliases, dict):
+                aliases = {}
+
+            target_ref = None
+            if current_model in redirects:
+                target_ref = redirects[current_model]
+            elif current_model in aliases:
+                target_ref = aliases[current_model]
+
+            if target_ref is None:
+                return current_instance, current_model
+
+            next_instance, next_model = self._parse_target_reference(target_ref, current_instance)
+            if not next_instance or not next_model:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid model mapping for '{current_instance}/{current_model}'.",
+                )
+
+            pair = (next_instance, next_model)
+            if pair in visited:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Model alias/redirect cycle detected near '{next_instance}/{next_model}'.",
+                )
+            visited.add(pair)
+            current_instance, current_model = next_instance, next_model
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"Too many alias/redirect hops while resolving model '{instance_name}/{model_name}'.",
+        )
+
+    def _resolve_model_targets(
+        self,
+        instance_name: str,
+        model_name: str,
+        path: Optional[List[tuple]] = None,
+        depth: int = 0,
+        max_depth: int = 16,
+    ) -> List[tuple]:
+        if path is None:
+            path = []
+        node = (instance_name, model_name)
+        if depth > max_depth:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Too many alias/redirect hops while resolving model '{instance_name}/{model_name}'.",
+            )
+        if node in path:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Model alias/redirect cycle detected near '{instance_name}/{model_name}'.",
+            )
+
+        instance_conf = self._get_instance_config_any_state(instance_name)
+        if not instance_conf:
+            raise HTTPException(status_code=400, detail=f"Instance '{instance_name}' not found.")
+
+        redirects = instance_conf.get("model_redirects")
+        aliases = instance_conf.get("model_aliases")
+        if not isinstance(redirects, dict):
+            redirects = {}
+        if not isinstance(aliases, dict):
+            aliases = {}
+
+        mapping_value = None
+        if model_name in redirects:
+            mapping_value = redirects[model_name]
+        elif model_name in aliases:
+            mapping_value = aliases[model_name]
+
+        if mapping_value is None:
+            return [node]
+
+        if isinstance(mapping_value, str):
+            next_instance, next_model = self._parse_target_reference(mapping_value, instance_name)
+            if not next_instance or not next_model:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid model mapping for '{instance_name}/{model_name}'.",
+                )
+            return self._resolve_model_targets(
+                next_instance,
+                next_model,
+                path=path + [node],
+                depth=depth + 1,
+                max_depth=max_depth,
+            )
+
+        if isinstance(mapping_value, list):
+            resolved = []
+            for ref in mapping_value:
+                next_instance, next_model = self._parse_target_reference(ref, instance_name)
+                if not next_instance or not next_model:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid model mapping list for '{instance_name}/{model_name}'.",
+                    )
+                nested = self._resolve_model_targets(
+                    next_instance,
+                    next_model,
+                    path=path + [node],
+                    depth=depth + 1,
+                    max_depth=max_depth,
+                )
+                for item in nested:
+                    if item not in resolved:
+                        resolved.append(item)
+            if not resolved:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid empty model mapping list for '{instance_name}/{model_name}'.",
+                )
+            return resolved
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid model mapping type for '{instance_name}/{model_name}'.",
+        )
+
+    def _build_failsafe_chain(self, primary_instance: str) -> List[str]:
+        instance_conf = self._get_instance_config(primary_instance)
+        chain = [primary_instance]
+        if instance_conf and instance_conf.get("failsafe_providers"):
+            for prov in instance_conf["failsafe_providers"]:
+                if prov not in chain:
+                    chain.append(prov)
+            return chain
+
+        enabled_instances = [inst["name"] for inst in self.instances_config if inst.get("enabled", True)]
+        if primary_instance in enabled_instances:
+            enabled_instances = [n for n in enabled_instances if n != primary_instance]
+        enabled_instances.insert(0, primary_instance)
+        return enabled_instances
 
     # TODO: ApiKeyManager должен быть адаптирован для работы с ключами инстансов
     def _get_instance_api_key(self, instance_name: str) -> Optional[str]:
@@ -82,6 +263,10 @@ class OpenAICompatModule(BaseModule):
         if instance_config and instance_config.get("api_keys"):
             return instance_config["api_keys"][0]
         return None
+
+    @staticmethod
+    def _key_tail_for_log(api_key: Optional[str]) -> str:
+        return f"...{api_key[-4:]}" if api_key else "<no-key>"
 
     async def _execute_non_streaming_with_rotation(
         self,
@@ -96,12 +281,8 @@ class OpenAICompatModule(BaseModule):
             raise HTTPException(status_code=400, detail=f"Instance '{instance_name}' not found in configuration.")
 
         base_url = instance_config["base_url"]
-        # TODO: Реализовать полноценную ротацию ключей для инстанса
         current_api_key = self._get_instance_api_key(instance_name)
-        if not current_api_key:
-            raise HTTPException(status_code=503, detail=f"No API keys available for instance '{instance_name}'.")
-
-        key_exhausted_message = f"All API keys for instance {instance_name} are exhausted or failed."
+        key_tail_for_log = self._key_tail_for_log(current_api_key)
 
         current_proxy_config = None
         httpx_proxies = None
@@ -110,13 +291,15 @@ class OpenAICompatModule(BaseModule):
             current_proxy_config = self.proxy_manager.get_proxy()
             httpx_proxies = self._get_httpx_proxies(current_proxy_config)
 
-        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {current_api_key}"}
+        headers = {"Content-Type": "application/json"}
+        if current_api_key:
+            headers["Authorization"] = f"Bearer {current_api_key}"
         if extra_headers:
             headers.update(extra_headers)
             
         url = f"{base_url.rstrip('/')}{endpoint_path}"
         proxy_url_for_log = current_proxy_config['url'] if current_proxy_config else "None (Direct)"
-        logger.debug(f"Attempting OpenAI Compatible API call for instance '{instance_name}': {method} {url} with key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}")
+        logger.debug(f"Attempting OpenAI Compatible API call for instance '{instance_name}': {method} {url} with key {key_tail_for_log}, proxy {proxy_url_for_log}")
         try:
             client_args = {"timeout": 60.0}
             transport = None
@@ -164,7 +347,7 @@ class OpenAICompatModule(BaseModule):
                     raise HTTPException(status_code=code, detail=detail)
 
                 response_data = response.json()
-                logger.info(f"OpenAI Compatible API call successful for instance {instance_name} with key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}.")
+                logger.info(f"OpenAI Compatible API call successful for instance {instance_name} with key {key_tail_for_log}, proxy {proxy_url_for_log}.")
 
                 force_rotation_enabled = False
                 try:
@@ -190,27 +373,26 @@ class OpenAICompatModule(BaseModule):
             status_code = e.response.status_code
 
             if status_code in [401, 403]:
-                logger.warning(f"Key error for instance {instance_name} (key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}): HTTP {status_code} - {error_detail}. Rotating key.")
-                # TODO: Implement key rotation for instance
+                logger.warning(f"Key error for instance {instance_name} (key {key_tail_for_log}, proxy {proxy_url_for_log}): HTTP {status_code} - {error_detail}.")
                 raise HTTPException(status_code=status_code, detail=f"Key error for instance {instance_name}: {error_detail}")
             
             elif 400 <= status_code < 500 and status_code != 429:
-                logger.error(f"Client error for instance {instance_name} (key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}): HTTP {status_code} - {error_detail}")
+                logger.error(f"Client error for instance {instance_name} (key {key_tail_for_log}, proxy {proxy_url_for_log}): HTTP {status_code} - {error_detail}")
                 raise HTTPException(status_code=status_code, detail=f"OpenAI Compatible API client error: {error_detail}")
             
             else:
-                logger.warning(f"HTTPStatusError (status {status_code}, type {type(e).__name__}) for instance {instance_name} (key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}): {error_detail}. Attempting proxy rotation.")
+                logger.warning(f"HTTPStatusError (status {status_code}, type {type(e).__name__}) for instance {instance_name} (key {key_tail_for_log}, proxy {proxy_url_for_log}): {error_detail}. Attempting proxy rotation.")
                 if self.proxy_manager.active and self.proxy_manager.rotate_proxy():
-                    logger.info(f"Successfully rotated to next proxy for key ...{current_api_key[-4:]} of instance {instance_name}. Retrying.")
+                    logger.info(f"Successfully rotated to next proxy for key {key_tail_for_log} of instance {instance_name}. Retrying.")
                     raise HTTPException(status_code=status_code, detail=f"Error after proxy rotation attempt: {error_detail}")
                 else:
                     raise HTTPException(status_code=status_code, detail=f"Error, proxy rotation failed or exhausted: {error_detail}")
 
         except (httpx.RequestError, Exception) as e: 
             error_type_name = type(e).__name__
-            logger.warning(f"{error_type_name} for instance {instance_name} (key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}): {str(e)}. Attempting proxy rotation.")
+            logger.warning(f"{error_type_name} for instance {instance_name} (key {key_tail_for_log}, proxy {proxy_url_for_log}): {str(e)}. Attempting proxy rotation.")
             if self.proxy_manager.active and self.proxy_manager.rotate_proxy():
-                logger.info(f"Successfully rotated to next proxy for key ...{current_api_key[-4:]} of instance {instance_name} after {error_type_name}. Retrying.")
+                logger.info(f"Successfully rotated to next proxy for key {key_tail_for_log} of instance {instance_name} after {error_type_name}. Retrying.")
                 raise HTTPException(status_code=500, detail=f"Error after proxy rotation attempt: {str(e)}")
             else:
                 raise HTTPException(status_code=500, detail=f"Error, proxy rotation failed or exhausted: {str(e)}")
@@ -230,10 +412,7 @@ class OpenAICompatModule(BaseModule):
 
         base_url = instance_config["base_url"]
         current_api_key = self._get_instance_api_key(instance_name)
-        if not current_api_key:
-            logger.error(f"No API keys available for instance '{instance_name}' for streaming.")
-            yield {"error": {"message": f"No API keys for instance '{instance_name}'.", "type": "server_error", "code": "no_api_keys"}}
-            return
+        key_tail_for_log = self._key_tail_for_log(current_api_key)
 
         current_proxy_config = None
         httpx_proxies = None
@@ -244,15 +423,16 @@ class OpenAICompatModule(BaseModule):
         
         headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {current_api_key}",
             "Accept": "text/event-stream"
         }
+        if current_api_key:
+            headers["Authorization"] = f"Bearer {current_api_key}"
         if extra_headers:
             headers.update(extra_headers)
 
         url = f"{base_url.rstrip('/')}{endpoint_path}"
         proxy_url_for_log = current_proxy_config['url'] if current_proxy_config else "None (Direct)"
-        logger.debug(f"Attempting OpenAI Compatible API stream for instance '{instance_name}': POST {url} with key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}")
+        logger.debug(f"Attempting OpenAI Compatible API stream for instance '{instance_name}': POST {url} with key {key_tail_for_log}, proxy {proxy_url_for_log}")
         try:
             client_args = {"timeout": 60.0}
             transport_stream = None
@@ -280,18 +460,18 @@ class OpenAICompatModule(BaseModule):
 
                         status_code = response.status_code
                         if status_code in [401, 403]:
-                            logger.warning(f"Key error for instance {instance_name} stream (key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}): HTTP {status_code} - {error_detail}. Not retrying.")
+                            logger.warning(f"Key error for instance {instance_name} stream (key {key_tail_for_log}, proxy {proxy_url_for_log}): HTTP {status_code} - {error_detail}. Not retrying.")
                             yield {"error": {"message": f"Key error for instance {instance_name} stream: {error_detail}", "type": "authentication_error", "code": str(status_code)}}
                             return
 
                         elif 400 <= status_code < 500 and status_code != 429:
-                            logger.error(f"Client error for instance {instance_name} stream (key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}): HTTP {status_code} - {error_detail}")
+                            logger.error(f"Client error for instance {instance_name} stream (key {key_tail_for_log}, proxy {proxy_url_for_log}): HTTP {status_code} - {error_detail}")
                             yield {"error": {"message": f"OpenAI Compatible API client error (stream): {error_detail}", "type": "invalid_request_error", "code": str(status_code)}}
                             return
                         else:
-                            logger.warning(f"HTTPStatusError (status {status_code}) for instance {instance_name} stream (key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}): {error_detail}. Attempting proxy rotation.")
+                            logger.warning(f"HTTPStatusError (status {status_code}) for instance {instance_name} stream (key {key_tail_for_log}, proxy {proxy_url_for_log}): {error_detail}. Attempting proxy rotation.")
                             if self.proxy_manager.active and self.proxy_manager.rotate_proxy():
-                                logger.info(f"Successfully rotated to next proxy for key ...{current_api_key[-4:]} of instance {instance_name} (stream). Retrying.")
+                                logger.info(f"Successfully rotated to next proxy for key {key_tail_for_log} of instance {instance_name} (stream). Retrying.")
                                 yield {"error": {"message": f"Error after proxy rotation attempt (stream): {error_detail}", "type": "server_error", "code": str(status_code)}}
                                 return
                             else:
@@ -299,7 +479,7 @@ class OpenAICompatModule(BaseModule):
                                 yield {"error": {"message": f"HTTP error {status_code}, proxy rotation failed/exhausted (stream): {error_detail}", "type": "server_error", "code": str(status_code)}}
                                 return
 
-                    logger.info(f"OpenAI Compatible API stream successful (status 200) for instance '{instance_name}' with key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}. Processing stream.")
+                    logger.info(f"OpenAI Compatible API stream successful (status 200) for instance '{instance_name}' with key {key_tail_for_log}, proxy {proxy_url_for_log}. Processing stream.")
                     async for line in response.aiter_lines():
                         if line.startswith("data: "):
                             data_content = line[len("data: "):].strip()
@@ -333,24 +513,26 @@ class OpenAICompatModule(BaseModule):
             if isinstance(e, FilteredStreamContentException):
                 raise
             error_type_name = type(e).__name__
-            logger.warning(f"{error_type_name} for instance {instance_name} stream (key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}): {str(e)}. Not retrying with proxy/key rotation for now.")
+            logger.warning(f"{error_type_name} for instance {instance_name} stream (key {key_tail_for_log}, proxy {proxy_url_for_log}): {str(e)}. Not retrying with proxy/key rotation for now.")
             yield {"error": {"message": f"Error during stream connection or processing for instance '{instance_name}': {str(e)}", "type": "server_error", "code": "stream_error"}}
             return
 
     async def chat_completion(self, request: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
         model_identifier = request.get("model", "")
-        instance_name, actual_model_name = self.parse_instance_and_model_id(model_identifier)
-        if not instance_name or not actual_model_name:
+        requested_instance, requested_model_name = self.parse_instance_and_model_id(model_identifier)
+        if not requested_instance or not requested_model_name:
             logger.error(f"Invalid model identifier format for OpenAI Compatible module: {model_identifier}")
             yield {"error": {"message": f"Invalid model identifier format. Expected 'oai_compat_INSTANCE_NAME/model_name' or 'openai_INSTANCE_NAME/model_name', got '{model_identifier}'.", "type": "invalid_request_error"}}
             return
-            
+
+        resolved_targets = self._resolve_model_targets(requested_instance, requested_model_name)
+        instance_name, actual_model_name = resolved_targets[0]
+
         payload_to_send = dict(request)
         payload_to_send["model"] = actual_model_name
 
         reformat_settings = get_reformat_settings()
         smart_context_settings = get_smart_context_zipper_settings()
-        print(self.get_name() + " " + instance_name)
         module_reformat_settings = reformat_settings.get(instance_name, {})
         module_scz_settings = smart_context_settings.get(instance_name, {})
 
@@ -367,107 +549,104 @@ class OpenAICompatModule(BaseModule):
 
         logger.debug(f"OpenAI Compatible chat_completion for instance '{instance_name}', model '{actual_model_name}'. Request: {payload_to_send}")
 
-        instance_conf = self._get_instance_config(instance_name)
-        failsafe_chain = [instance_name]
-        if instance_conf and instance_conf.get("failsafe_providers"):
-            for prov in instance_conf["failsafe_providers"]:
-                if prov not in failsafe_chain:
-                    failsafe_chain.append(prov)
+        explicit_route_chain = len(resolved_targets) > 1
+        if explicit_route_chain:
+            attempt_plan = [(target_instance, [target_instance], target_model) for target_instance, target_model in resolved_targets]
         else:
-            enabled_instances = [inst["name"] for inst in self.instances_config if inst.get("enabled", True)]
-            if instance_name not in enabled_instances:
-                enabled_instances.insert(0, instance_name)
-            failsafe_chain = enabled_instances
+            attempt_plan = [(instance_name, self._build_failsafe_chain(instance_name), actual_model_name)]
 
         last_exc = None
         repeat_count = 2
         for i in range(0,repeat_count):
-            for current_instance in failsafe_chain:
-                try:
-                    first_chunk = None
-                    stream = self._execute_streaming_with_rotation(current_instance, "/chat/completions", payload_to_send)
-                    # Попробовать взять первый чанк
-                    async for chunk in stream:
-                        first_chunk = chunk
-                        break
-                    if first_chunk is None:
-                        raise Exception("Stream завершился без сообщений.")
+            for target_instance, failsafe_chain, target_model in attempt_plan:
+                for current_instance in failsafe_chain:
+                    try:
+                        payload_for_attempt = dict(payload_to_send)
+                        payload_for_attempt["model"] = target_model
+                        first_chunk = None
+                        stream = self._execute_streaming_with_rotation(current_instance, "/chat/completions", payload_for_attempt)
+                        # Попробовать взять первый чанк
+                        async for chunk in stream:
+                            first_chunk = chunk
+                            break
+                        if first_chunk is None:
+                            raise Exception("Stream завершился без сообщений.")
 
-                    content_candidate = ""
-                    if isinstance(first_chunk, dict):
-                        if "choices" in first_chunk and first_chunk["choices"]:
-                            delta = first_chunk["choices"][0].get("delta", {})
-                            content_candidate = delta.get("content", "")
-                        elif "error" in first_chunk:
-                            content_candidate = first_chunk["error"].get("message", "filtered")
-                    if content_candidate:
-                        try:
-                            check_string_for_errors(content_candidate)
-                        except Exception as e:
-                            raise FilteredStreamContentException(str(e))
-
-                    # Если всё хорошо — yield первый чанк, затем собирать usage (если нужно) и yield все остальные чанки
-                    instance_config = self._get_instance_config(current_instance)
-                    use_custom = instance_config and instance_config.get("use_custom_tokenizer")
-
-                    collected_completion = ""
-                    prompt_str = ""
-                    if "messages" in payload_to_send:
-                        prompt_str = "\n".join([msg.get("content", "") for msg in payload_to_send["messages"]])
-                    elif "prompt" in payload_to_send:
-                        if isinstance(payload_to_send["prompt"], list):
-                            prompt_str = "\n".join(payload_to_send["prompt"])
-                        else:
-                            prompt_str = str(payload_to_send["prompt"])
-
-                    # Выдать первый чанк
-                    if use_custom and "choices" in first_chunk and first_chunk["choices"]:
-                        delta = first_chunk["choices"][0].get("delta", {})
-                        part = delta.get("content", "")
-                        if part:
-                            collected_completion += part
-                    yield first_chunk
-
-                    # Yield остальные чанки
-                    finish_sent = False
-                    async for chunk in stream:
-                        # накапливаем текст для usage
-                        if use_custom and "choices" in chunk and chunk["choices"]:
+                        content_candidate = ""
+                        if isinstance(first_chunk, dict):
+                            if "choices" in first_chunk and first_chunk["choices"]:
+                                delta = first_chunk["choices"][0].get("delta", {})
+                                content_candidate = delta.get("content", "")
+                            elif "error" in first_chunk:
+                                content_candidate = first_chunk["error"].get("message", "filtered")
+                        if content_candidate:
                             try:
-                                delta = chunk["choices"][0].get("delta", {})
-                                part = delta.get("content", "")
-                                if part:
-                                    collected_completion += part
+                                check_string_for_errors(content_candidate)
                             except Exception as e:
-                                logger.exception(f"Ошибка накопления completion части: {e}")
+                                raise FilteredStreamContentException(str(e))
 
-                            # определить финальный чанк — finish_reason == "stop" и есть usage
-                            finish = False
-                            if chunk["choices"][0].get("finish_reason") == "stop":
-                                finish = True
+                        # Если всё хорошо — yield первый чанк, затем собирать usage (если нужно) и yield все остальные чанки
+                        instance_config = self._get_instance_config(current_instance)
+                        use_custom = instance_config and instance_config.get("use_custom_tokenizer")
 
-                            # добавить usage в финальный чанк
-                            if finish and "usage" in chunk and not finish_sent:
+                        collected_completion = ""
+                        prompt_str = ""
+                        if "messages" in payload_for_attempt:
+                            prompt_str = "\n".join([msg.get("content", "") for msg in payload_for_attempt["messages"]])
+                        elif "prompt" in payload_for_attempt:
+                            if isinstance(payload_for_attempt["prompt"], list):
+                                prompt_str = "\n".join(payload_for_attempt["prompt"])
+                            else:
+                                prompt_str = str(payload_for_attempt["prompt"])
+
+                        # Выдать первый чанк
+                        if use_custom and "choices" in first_chunk and first_chunk["choices"]:
+                            delta = first_chunk["choices"][0].get("delta", {})
+                            part = delta.get("content", "")
+                            if part:
+                                collected_completion += part
+                        yield first_chunk
+
+                        # Yield остальные чанки
+                        finish_sent = False
+                        async for chunk in stream:
+                            # накапливаем текст для usage
+                            if use_custom and "choices" in chunk and chunk["choices"]:
                                 try:
-                                    prompt_tokens = get_token_count(prompt_str, actual_model_name)
-                                    completion_tokens = get_token_count(collected_completion, actual_model_name)
-                                    chunk["usage"] = {
-                                        "prompt_tokens": prompt_tokens,
-                                        "completion_tokens": completion_tokens,
-                                        "total_tokens": prompt_tokens + completion_tokens,
-                                        "prompt_tokens_details": {"cached_tokens": 0}
-                                    }
-                                except Exception as err:
-                                    logger.exception(f"Ошибка пересчёта usage кастомным токенайзером в stream: {err}")
-                                finish_sent = True
-                        yield chunk
-                    return  # На первом успешном инстансе прекращаем
-                except FilteredStreamContentException as filtered_exc:
-                    last_exc = filtered_exc
-                    logger.warning(f"Failsafe: instance '{current_instance}' не ответил (reason: {filtered_exc}). Перехожу к следующему инстансу.")
-                except Exception as exc:
-                    last_exc = exc
-                    logger.warning(f"Failsafe: instance '{current_instance}' вернул ошибку: {exc}")
+                                    delta = chunk["choices"][0].get("delta", {})
+                                    part = delta.get("content", "")
+                                    if part:
+                                        collected_completion += part
+                                except Exception as e:
+                                    logger.exception(f"Ошибка накопления completion части: {e}")
+
+                                # определить финальный чанк — finish_reason == "stop" и есть usage
+                                finish = False
+                                if chunk["choices"][0].get("finish_reason") == "stop":
+                                    finish = True
+
+                                # добавить usage в финальный чанк
+                                if finish and "usage" in chunk and not finish_sent:
+                                    try:
+                                        prompt_tokens = get_token_count(prompt_str, target_model)
+                                        completion_tokens = get_token_count(collected_completion, target_model)
+                                        chunk["usage"] = {
+                                            "prompt_tokens": prompt_tokens,
+                                            "completion_tokens": completion_tokens,
+                                            "total_tokens": prompt_tokens + completion_tokens,
+                                            "prompt_tokens_details": {"cached_tokens": 0}
+                                        }
+                                    except Exception as err:
+                                        logger.exception(f"Ошибка пересчёта usage кастомным токенайзером в stream: {err}")
+                                    finish_sent = True
+                            yield chunk
+                        return  # На первом успешном инстансе прекращаем
+                    except FilteredStreamContentException as filtered_exc:
+                        last_exc = filtered_exc
+                        logger.warning(f"Failsafe: instance '{current_instance}' не ответил (reason: {filtered_exc}). Перехожу к следующему инстансу.")
+                    except Exception as exc:
+                        last_exc = exc
+                        logger.warning(f"Failsafe: instance '{current_instance}' вернул ошибку: {exc}")
 
         log_level = logger.getEffectiveLevel()
         if log_level <= logging.DEBUG:
@@ -503,75 +682,72 @@ class OpenAICompatModule(BaseModule):
 
     async def completion(self, request: Dict[str, Any]) -> Dict[str, Any]:
         model_identifier = request.get("model", "")
-        instance_name, actual_model_name = self.parse_instance_and_model_id(model_identifier)
-        if not instance_name or not actual_model_name:
+        requested_instance, requested_model_name = self.parse_instance_and_model_id(model_identifier)
+        if not requested_instance or not requested_model_name:
             raise HTTPException(status_code=400, detail=f"Invalid model format for completion. Expected 'oai_compat_INSTANCE_NAME/model_name' or 'openai_INSTANCE_NAME/model_name', got '{model_identifier}'.")
+
+        resolved_targets = self._resolve_model_targets(requested_instance, requested_model_name)
+        instance_name, actual_model_name = resolved_targets[0]
 
         payload_to_send = dict(request)
         payload_to_send["model"] = actual_model_name
 
-        # Failsafe-провайдеры кастомно из инстанса, либо общий enabled-список по старому стилю
-        instance_conf = self._get_instance_config(instance_name)
-        failsafe_chain = [instance_name]
-        if instance_conf and instance_conf.get("failsafe_providers"):
-            # Только объявленные owner и его failsafe-провайдеры по порядку, без циклов; если пусто — только owner
-            for prov in instance_conf["failsafe_providers"]:
-                if prov not in failsafe_chain:
-                    failsafe_chain.append(prov)
+        explicit_route_chain = len(resolved_targets) > 1
+        if explicit_route_chain:
+            attempt_plan = [(target_instance, [target_instance], target_model) for target_instance, target_model in resolved_targets]
         else:
-            # старое поведение: обход по enabled
-            enabled_instances = [inst["name"] for inst in self.instances_config if inst.get("enabled", True)]
-            if instance_name not in enabled_instances:
-                enabled_instances.insert(0, instance_name)
-            failsafe_chain = enabled_instances
+            attempt_plan = [(instance_name, self._build_failsafe_chain(instance_name), actual_model_name)]
 
         last_exc = None
         repeat_count = 2
         for i in range(0,repeat_count):
-            for current_instance in failsafe_chain:
-                try:
-                    result = await self._execute_non_streaming_with_rotation(current_instance, "POST", "/completions", payload_to_send)
-                    # Успех — считаем usage если нужно и возвращаем
-                    instance_config = self._get_instance_config(current_instance)
-                    if instance_config and instance_config.get("use_custom_tokenizer"):
-                        try:
-                            raw_prompt = ""
-                            # Для chat/completions это "messages", для completions "prompt"
-                            if "messages" in payload_to_send:
-                                raw_prompt = "\n".join(
-                                    [msg.get("content", "") for msg in payload_to_send["messages"]]
-                                )
-                            elif "prompt" in payload_to_send:
-                                if isinstance(payload_to_send["prompt"], list):
-                                    raw_prompt = "\n".join(payload_to_send["prompt"])
-                                else:
-                                    raw_prompt = str(payload_to_send["prompt"])
-                            completion_text = ""
-                            if "choices" in result and result["choices"]:
-                                message = result["choices"][0]
-                                if "message" in message and isinstance(message["message"], dict) and "content" in message["message"]:
-                                    completion_text = message["message"]["content"]
-                                elif "text" in message:
-                                    completion_text = message["text"]
+            for target_instance, failsafe_chain, target_model in attempt_plan:
+                for current_instance in failsafe_chain:
+                    try:
+                        payload_for_attempt = dict(payload_to_send)
+                        payload_for_attempt["model"] = target_model
+                        result = await self._execute_non_streaming_with_rotation(current_instance, "POST", "/completions", payload_for_attempt)
+                        # Успех — считаем usage если нужно и возвращаем
+                        instance_config = self._get_instance_config(current_instance)
+                        if instance_config and instance_config.get("use_custom_tokenizer"):
+                            try:
+                                raw_prompt = ""
+                                # Для chat/completions это "messages", для completions "prompt"
+                                if "messages" in payload_for_attempt:
+                                    raw_prompt = "\n".join(
+                                        [msg.get("content", "") for msg in payload_for_attempt["messages"]]
+                                    )
+                                elif "prompt" in payload_for_attempt:
+                                    if isinstance(payload_for_attempt["prompt"], list):
+                                        raw_prompt = "\n".join(payload_for_attempt["prompt"])
+                                    else:
+                                        raw_prompt = str(payload_for_attempt["prompt"])
+                                completion_text = ""
+                                if "choices" in result and result["choices"]:
+                                    message = result["choices"][0]
+                                    if "message" in message and isinstance(message["message"], dict) and "content" in message["message"]:
+                                        completion_text = message["message"]["content"]
+                                    elif "text" in message:
+                                        completion_text = message["text"]
 
-                            prompt_tokens = get_token_count(raw_prompt, actual_model_name)
-                            completion_tokens = get_token_count(completion_text, actual_model_name)
-                            usage_custom = {
-                                "prompt_tokens": prompt_tokens,
-                                "completion_tokens": completion_tokens,
-                                "total_tokens": prompt_tokens + completion_tokens,
-                                "prompt_tokens_details": {"cached_tokens": 0}
-                            }
-                            result["usage"] = usage_custom
-                        except Exception as err:
-                            logger.exception(f"Ошибка пересчёта usage кастомным токенайзером: {err}")
-                    return result
-                except FilteredStreamContentException as filtered_exc:
-                    last_exc = filtered_exc
-                    logger.warning(f"Failsafe: instance '{current_instance}' не ответил (reason: {filtered_exc}). Перехожу к следующему инстансу.")
-                except Exception as exc:
-                    last_exc = FilteredStreamContentException("Failsafe: instance '{current_instance}' не ответил.")
-                    logger.warning(f"Failsafe: instance '{current_instance}' не ответил.")
+                                prompt_tokens = get_token_count(raw_prompt, target_model)
+                                completion_tokens = get_token_count(completion_text, target_model)
+                                usage_custom = {
+                                    "prompt_tokens": prompt_tokens,
+                                    "completion_tokens": completion_tokens,
+                                    "total_tokens": prompt_tokens + completion_tokens,
+                                    "prompt_tokens_details": {"cached_tokens": 0}
+                                }
+                                result["usage"] = usage_custom
+                            except Exception as err:
+                                logger.exception(f"Ошибка пересчёта usage кастомным токенайзером: {err}")
+                        return result
+                    except FilteredStreamContentException as filtered_exc:
+                        last_exc = filtered_exc
+                        logger.warning(f"Failsafe: instance '{current_instance}' не ответил (reason: {filtered_exc}). Перехожу к следующему инстансу.")
+                    except Exception as exc:
+                        last_exc = exc
+                        logger.warning(f"Failsafe: instance '{current_instance}' не ответил.")
 
         # Ни один из цепочки не сработал – финальный фейл
         raise HTTPException(status_code=503, detail=f"Все указанные провайдеры (failsafe chain) недоступны. Подробнее: {last_exc} Возможно, стоит попробовать ещё раз.")
@@ -586,7 +762,12 @@ class OpenAICompatModule(BaseModule):
             else:
                 raise HTTPException(status_code=400, detail="No OpenAI Compatible instances configured for embeddings.")
 
-        payload_to_send = request
+        if actual_model_name:
+            instance_name, actual_model_name = self._resolve_instance_and_model(instance_name, actual_model_name)
+
+        payload_to_send = dict(request)
+        if actual_model_name:
+            payload_to_send["model"] = actual_model_name
 
         return await self._execute_non_streaming_with_rotation(instance_name, "POST", "/embeddings", payload_to_send)
 
@@ -614,21 +795,25 @@ class OpenAICompatModule(BaseModule):
             else:
                 raise HTTPException(status_code=500, detail="No OpenAI Compatible instances configured for audio transcription.")
 
+        if actual_model_name:
+            instance_name, actual_model_name = self._resolve_instance_and_model(instance_name, actual_model_name)
+
         logger.info(f"Routing audio transcription to instance: {instance_name} for model {model_identifier}")
 
         files = {'file': (filename, file_data)}
-        data_payload = {k: str(v) for k, v in request_params.items() if v is not None}
+        rewritten_params = dict(request_params)
+        if actual_model_name:
+            rewritten_params["model"] = actual_model_name
+        data_payload = {k: str(v) for k, v in rewritten_params.items() if v is not None}
 
         instance_config = self._get_instance_config(instance_name)
         if not instance_config:
             raise HTTPException(status_code=400, detail=f"Instance '{instance_name}' not found.")
         base_url = instance_config["base_url"]
         api_key = self._get_instance_api_key(instance_name)
-        if not api_key:
-            raise HTTPException(status_code=503, detail=f"No API key for instance '{instance_name}'.")
 
         target_url = f"{base_url.rstrip('/')}/audio/transcriptions"
-        headers = {"Authorization": f"Bearer {api_key}"}
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
         httpx_proxies = None
         current_proxy_config = None
@@ -667,21 +852,25 @@ class OpenAICompatModule(BaseModule):
             else:
                 raise HTTPException(status_code=500, detail="No OpenAI Compatible instances configured for audio translation.")
 
+        if actual_model_name:
+            instance_name, actual_model_name = self._resolve_instance_and_model(instance_name, actual_model_name)
+
         logger.info(f"Routing audio translation to instance: {instance_name} for model {model_identifier}")
 
         files = {'file': (filename, file_data)}
-        data_payload = {k: str(v) for k, v in request_params.items() if v is not None}
+        rewritten_params = dict(request_params)
+        if actual_model_name:
+            rewritten_params["model"] = actual_model_name
+        data_payload = {k: str(v) for k, v in rewritten_params.items() if v is not None}
 
         instance_config = self._get_instance_config(instance_name)
         if not instance_config:
             raise HTTPException(status_code=400, detail=f"Instance '{instance_name}' not found.")
         base_url = instance_config["base_url"]
         api_key = self._get_instance_api_key(instance_name)
-        if not api_key:
-            raise HTTPException(status_code=503, detail=f"No API key for instance '{instance_name}'.")
 
         target_url = f"{base_url.rstrip('/')}/audio/translations"
-        headers = {"Authorization": f"Bearer {api_key}"}
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
         httpx_proxies = None
         current_proxy_config = None

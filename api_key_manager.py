@@ -178,6 +178,33 @@ class ApiKeyManager:
             logger.warning(f"API key '{api_key_to_remove}' not found for service '{service_name}'.")
             return False
 
+    def update_key(self, service_name: str, old_api_key: str, new_api_key: str) -> bool:
+        """Обновляет API ключ для сервиса и сохраняет в файл."""
+        if service_name not in self.api_keys:
+            logger.warning(f"Service '{service_name}' not found in loaded keys.")
+            return False
+        if not isinstance(new_api_key, str) or not new_api_key.strip():
+            logger.error(f"Invalid new API key for service '{service_name}'.")
+            return False
+
+        keys = self.api_keys[service_name]
+        if old_api_key not in keys:
+            logger.warning(f"Old API key not found for service '{service_name}'.")
+            return False
+        if new_api_key in keys and new_api_key != old_api_key:
+            logger.warning(f"New API key already exists for service '{service_name}'.")
+            return False
+
+        idx = keys.index(old_api_key)
+        keys[idx] = new_api_key
+
+        current_idx = self.current_key_indices.get(service_name, -1)
+        if current_idx == idx:
+            self.current_key_indices[service_name] = idx
+
+        logger.info(f"Updated API key for service '{service_name}'.")
+        return self._save_keys_to_file(service_name)
+
     def reload_keys_for_service(self, service_name: str):
         """Перезагружает ключи для указанного сервиса из его файла."""
         if service_name not in self.key_files:

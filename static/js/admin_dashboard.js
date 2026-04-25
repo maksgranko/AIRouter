@@ -1,5 +1,44 @@
 let handlersAttached = false;
 
+function normalizeApiErrorMessage(responseData, rawText, statusCode) {
+    if (responseData && responseData.detail) {
+        if (Array.isArray(responseData.detail)) {
+            const first = responseData.detail[0];
+            if (first && typeof first === 'object') {
+                const pathStr = Array.isArray(first.loc) ? first.loc.join('.') : '';
+                return `${pathStr ? pathStr + ': ' : ''}${first.msg || 'Validation error'}`;
+            }
+            return responseData.detail.map((x) => String(x)).join('; ');
+        }
+        if (typeof responseData.detail === 'object') {
+            return JSON.stringify(responseData.detail);
+        }
+        return String(responseData.detail);
+    }
+    if (responseData && responseData.message) {
+        return String(responseData.message);
+    }
+    if (rawText && rawText.trim().length > 0) {
+        return rawText;
+    }
+    return `Ошибка ${statusCode}`;
+}
+
+function parseJsonObjectOrThrow(rawValue, fieldLabel) {
+    const source = (rawValue || '').trim();
+    if (!source) return {};
+    let parsed;
+    try {
+        parsed = JSON.parse(source);
+    } catch (_e) {
+        throw new Error(`${fieldLabel}: ожидается валидный JSON-объект.`);
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error(`${fieldLabel}: ожидается JSON-объект вида {"alias":"target"}.`);
+    }
+    return parsed;
+}
+
 async function makeApiRequest(url, method = 'GET', body = null) {
     const headers = { 'Content-Type': 'application/json' };
     const config = { 
@@ -11,12 +50,21 @@ async function makeApiRequest(url, method = 'GET', body = null) {
         config.body = JSON.stringify(body);
     }
     try {
-        const response = await fetch(url, config); 
-        const responseData = await response.json();
-        if (!response.ok) {
-            throw new Error(responseData.detail || `Ошибка ${response.status}`);
+        const response = await fetch(url, config);
+        const rawText = await response.text();
+        let responseData = null;
+        if (rawText && rawText.trim().length > 0) {
+            try {
+                responseData = JSON.parse(rawText);
+            } catch (_jsonErr) {
+                responseData = null;
+            }
         }
-        return responseData;
+        if (!response.ok) {
+            const detailMessage = normalizeApiErrorMessage(responseData, rawText, response.status);
+            throw new Error(detailMessage);
+        }
+        return responseData || { status: 'success' };
     } catch (error) {
         console.error(`Ошибка API запроса к ${url}:`, error);
         window.showNotification && window.showNotification('notification_area', error.message || 'Сетевая ошибка или ошибка сервера.', 'error');
@@ -370,6 +418,8 @@ async function loadDashboardData() {
                 keysHtml += '</ul>';
 
                 const useGlobalProxyChecked = instance.use_global_proxy !== false ? 'checked' : '';
+                const aliasesJson = JSON.stringify(instance.model_aliases || {}, null, 2);
+                const redirectsJson = JSON.stringify(instance.model_redirects || {}, null, 2);
 
                 // === Failsafe ComboBox+list ===
                 const allInstanceNames = data.openai_instances.map(i => i.name);
@@ -464,6 +514,13 @@ async function loadDashboardData() {
 
                         <div class="mt-3 mb-1">
                           ${failsafeHtml}
+                        </div>
+                        <div class="mt-3">
+                          <label class="form-label">Model aliases (JSON)</label>
+                          <textarea class="form-control form-control-sm openai-instance-aliases-json" rows="4" data-instance-name="${instance.name}">${aliasesJson}</textarea>
+                          <label class="form-label mt-2">Model redirects (JSON)</label>
+                          <textarea class="form-control form-control-sm openai-instance-redirects-json" rows="4" data-instance-name="${instance.name}">${redirectsJson}</textarea>
+                          <button type="button" class="btn btn-outline-primary btn-sm mt-2 openai-instance-save-mappings-btn" data-instance-name="${instance.name}">Сохранить aliases/redirects</button>
                         </div>
                     </div>
                 `;
@@ -742,6 +799,23 @@ function attachFormHandlers() {
             } catch (e) {}
         }
     });
+
+    document.getElementById('reload_modules_form')?.addEventListener('submit', async function(event) {
+        event.preventDefault();
+        try {
+            const result = await makeApiRequest(URLS.reloadModules, 'POST');
+            window.showNotification('notification_area', result.message || 'Модули перезагружены.');
+            loadDashboardData();
+        } catch (e) {}
+    });
+
+    document.getElementById('reload_https_form')?.addEventListener('submit', async function(event) {
+        event.preventDefault();
+        try {
+            const result = await makeApiRequest(URLS.renewHttps, 'POST', { force_renewal: false });
+            window.showNotification('notification_area', result.message || 'HTTPS сертификаты обновлены.');
+        } catch (e) {}
+    });
     
     // Безопасность AIRouter API
     document.getElementById('form_require_airouter_api_key')?.addEventListener('submit', async function(event){
@@ -785,14 +859,24 @@ function attachFormHandlers() {
         const name = form.elements['name'].value;
         const baseUrl = form.elements['base_url'].value;
         const apiKeysRaw = form.elements['api_keys'].value;
+        const aliasesRaw = form.elements['model_aliases']?.value || '{}';
+        const redirectsRaw = form.elements['model_redirects']?.value || '{}';
         const apiKeys = apiKeysRaw.split(',').map(k => k.trim()).filter(k => k);
 
-        if (!name || !baseUrl || apiKeys.length === 0) {
-            window.showNotification('notification_area','Все поля (Название, Base URL, API Ключи) должны быть заполнены.', 'error');
+        if (!name || !baseUrl) {
+            window.showNotification('notification_area','Поля Название и Base URL обязательны.', 'error');
             return;
         }
         try {
-            const result = await makeApiRequest(URLS.addOpenAIInstance, 'POST', { name, base_url: baseUrl, api_keys: apiKeys });
+            const modelAliases = parseJsonObjectOrThrow(aliasesRaw, 'Model aliases');
+            const modelRedirects = parseJsonObjectOrThrow(redirectsRaw, 'Model redirects');
+            const result = await makeApiRequest(URLS.addOpenAIInstance, 'POST', {
+                name,
+                base_url: baseUrl,
+                api_keys: apiKeys,
+                model_aliases: modelAliases,
+                model_redirects: modelRedirects,
+            });
             window.showNotification('notification_area', result.message || 'Инстанс OpenAI Compatible добавлен.');
             form.reset();
             loadDashboardData();
@@ -819,23 +903,41 @@ function attachFormHandlers() {
             return;
         }
 
+        if (target.classList.contains('openai-instance-save-mappings-btn')) {
+            try {
+                const card = target.closest('.card');
+                const aliasesRaw = card.querySelector('.openai-instance-aliases-json')?.value || '{}';
+                const redirectsRaw = card.querySelector('.openai-instance-redirects-json')?.value || '{}';
+                const modelAliases = parseJsonObjectOrThrow(aliasesRaw, 'Model aliases');
+                const modelRedirects = parseJsonObjectOrThrow(redirectsRaw, 'Model redirects');
+                const url = `/api/admin/ui/settings/openai-instances/${encodeURIComponent(instanceName)}/meta`;
+                const result = await makeApiRequest(url, 'PATCH', {
+                    model_aliases: modelAliases,
+                    model_redirects: modelRedirects,
+                });
+                window.showNotification('notification_area', result.message || 'Mappings сохранены.');
+                loadDashboardData();
+            } catch (e) {}
+            return;
+        }
+
         // Удаление инстанса
         if (target.classList.contains('openai-instance-remove-btn')) {
             if (!confirm(`Вы уверены, что хотите удалить инстанс "${instanceName}"?`)) return;
             try {
-                const url = URLS.deleteOpenAIInstance.replace('INSTANCE_NAME_PLACEHOLDER', instanceName);
+                const url = URLS.deleteOpenAIInstance.replace('INSTANCE_NAME_PLACEHOLDER', encodeURIComponent(instanceName));
                 const result = await makeApiRequest(url, 'DELETE');
                 window.showNotification('notification_area', result.message || `Инстанс "${instanceName}" удален.`);
                 loadDashboardData();
             } catch (e) { 
-                window.showNotification('notification_area',result.message || `Инстанс "${instanceName}" не был удален. Подробнее: ${e.message}`, 'error', 4000);}
+                window.showNotification('notification_area', `Инстанс "${instanceName}" не был удален. Подробнее: ${e.message}`, 'error', 4000);}
         }
         // Удаление ключа инстанса
         if (target.classList.contains('openai-instance-key-remove-btn')) {
             const apiKey = target.dataset.key;
             if (!confirm(`Вы уверены, что хотите удалить ключ ...${apiKey.slice(-4)} для инстанса "${instanceName}"?`)) return;
             try {
-                const url = URLS.deleteOpenAIInstanceKey.replace('INSTANCE_NAME_PLACEHOLDER', instanceName);
+                const url = URLS.deleteOpenAIInstanceKey.replace('INSTANCE_NAME_PLACEHOLDER', encodeURIComponent(instanceName));
                 const result = await makeApiRequest(url, 'DELETE', { api_key: apiKey });
                 window.showNotification('notification_area',result.message || 'Ключ API удален.');
                 loadDashboardData();
@@ -853,7 +955,7 @@ function attachFormHandlers() {
             const apiKey = apiKeyInput.value;
             if (!apiKey) { window.showNotification('notification_area','Ключ API не может быть пустым.', 'error'); return; }
             try {
-                const url = URLS.addOpenAIInstanceKey.replace('INSTANCE_NAME_PLACEHOLDER', instanceName);
+                const url = URLS.addOpenAIInstanceKey.replace('INSTANCE_NAME_PLACEHOLDER', encodeURIComponent(instanceName));
                 const result = await makeApiRequest(url, 'POST', { api_key: apiKey });
                 window.showNotification('notification_area',result.message || 'Ключ API добавлен к инстансу.');
                 apiKeyInput.value = '';

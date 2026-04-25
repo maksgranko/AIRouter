@@ -29,12 +29,15 @@ async def ui_api_add_service_key(
 ):
     key_manager = request.app.state.key_manager
     try:
-        key_manager.add_key(service_name, payload.api_key)
-        return JSONResponse(content={"status": "success", "message": f"API key added for service '{service_name}'."})
-    except Exception as e:
-        print(f"Error adding service API key via API for {service_name}: {e}")
         if service_name not in key_manager.key_files:
             raise HTTPException(status_code=404, detail=f"Service '{service_name}' not found.")
+        if not key_manager.add_key(service_name, payload.api_key):
+            raise HTTPException(status_code=400, detail="Could not add API key (already exists or invalid).")
+        return JSONResponse(content={"status": "success", "message": f"API key added for service '{service_name}'."})
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error adding service API key via API for {service_name}: {e}")
         raise HTTPException(status_code=500, detail=f"Could not add API key for service '{service_name}'.")
 
 @router.patch("/service/{service_name}/key", name="ui_api_patch_service_key")
@@ -51,8 +54,11 @@ async def ui_api_patch_service_key(
             raise HTTPException(status_code=404, detail="Old API key not found for this service.")
         if payload.new_api_key in keys:
             raise HTTPException(status_code=400, detail="New key already exists in this service.")
-        key_manager.update_key(service_name, payload.old_api_key, payload.new_api_key)
+        if not key_manager.update_key(service_name, payload.old_api_key, payload.new_api_key):
+            raise HTTPException(status_code=400, detail="Could not update API key for this service.")
         return JSONResponse(content={"status": "success", "message": f"API ключ обновлён для сервиса '{service_name}'."})
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error updating service API key via API for {service_name}: {e}")
         if service_name not in key_manager.key_files: 
@@ -68,15 +74,15 @@ async def ui_api_delete_service_key(
 ):
     key_manager = request.app.state.key_manager
     try:
-        if service_name not in key_manager.api_keys or payload.api_key not in key_manager.api_keys.get(service_name, []):
-             pass 
-        
-        key_manager.remove_key(service_name, payload.api_key)
+        if service_name not in key_manager.key_files:
+            raise HTTPException(status_code=404, detail=f"Service '{service_name}' not found.")
+        if not key_manager.remove_key(service_name, payload.api_key):
+            raise HTTPException(status_code=404, detail="API key not found for this service.")
         return JSONResponse(content={"status": "success", "message": f"API key removed for service '{service_name}'."})
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error deleting service API key via API for {service_name}: {e}")
-        if service_name not in key_manager.key_files: 
-            raise HTTPException(status_code=404, detail=f"Service '{service_name}' not found.")
         raise HTTPException(status_code=500, detail=f"Could not delete API key for service '{service_name}'.")
 
 @router.post("/airouter", name="ui_api_generate_airouter_key", status_code=status.HTTP_201_CREATED)
@@ -125,11 +131,11 @@ async def ui_api_delete_airouter_key(
 ):
     airouter_key_manager = request.app.state.airouter_key_manager
     try:
-        if not airouter_key_manager.key_exists(payload.api_key):
-            pass
-        
-        airouter_key_manager.remove_key(payload.api_key)
+        if not airouter_key_manager.remove_key(payload.api_key):
+            raise HTTPException(status_code=404, detail=f"AIRouter API key '{payload.api_key}' not found.")
         return JSONResponse(content={"status": "success", "message": f"AIRouter API key '{payload.api_key}' removed."})
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error deleting AIRouter API key via API: {e}")
         raise HTTPException(status_code=500, detail=f"Could not delete AIRouter API key '{payload.api_key}'.")
