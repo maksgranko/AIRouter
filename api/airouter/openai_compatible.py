@@ -3,7 +3,7 @@ import json
 import logging
 from typing import AsyncGenerator, Dict, Any, Optional
 
-from fastapi import APIRouter, Form, Request, UploadFile, HTTPException
+from fastapi import APIRouter, Form, Request, UploadFile, HTTPException, File
 from fastapi.responses import StreamingResponse
 
 # Получаем глобальный registry и logger из app.state, если они там есть,
@@ -68,6 +68,16 @@ def get_module(request: Request, request_data: dict):
                 
     logger.error(f"Failed to find module for model_identifier: '{model_identifier}'. Review request body or ensure module is registered and active.")
     raise HTTPException(status_code=400, detail=f"Module for model/service '{model_identifier}' not found or not registered.")
+
+
+def _require_module_method(module: Any, method_name: str):
+    method = getattr(module, method_name, None)
+    if not callable(method):
+        raise HTTPException(
+            status_code=501,
+            detail=f"Endpoint is not supported by module '{module.get_name()}'.",
+        )
+    return method
 
 
 async def sse_event_formatter(generator: AsyncGenerator[Dict[str, Any], None]) -> AsyncGenerator[str, None]:
@@ -209,6 +219,73 @@ async def generate_image(request: Request):
     module = get_module(request, body) # Передаем request
     return await module.generate_image(body)
 
+
+@router.post("/v1/images/edits")
+async def edit_image(
+    request: Request,
+    image: UploadFile = File(...),
+    model: Optional[str] = Form(None),
+    prompt: Optional[str] = Form(None),
+    mask: Optional[UploadFile] = File(None),
+    n: Optional[int] = Form(None),
+    size: Optional[str] = Form(None),
+    response_format: Optional[str] = Form(None),
+    user: Optional[str] = Form(None),
+):
+    model_name_to_use = model if model else "openai"
+    module = get_module(request, {"model": model_name_to_use})
+    method = _require_module_method(module, "generate_image_edit")
+
+    image_bytes = await image.read()
+    mask_bytes = await mask.read() if mask else None
+    request_params = {"model": model_name_to_use}
+    if prompt is not None:
+        request_params["prompt"] = prompt
+    if n is not None:
+        request_params["n"] = n
+    if size:
+        request_params["size"] = size
+    if response_format:
+        request_params["response_format"] = response_format
+    if user:
+        request_params["user"] = user
+
+    return await method(
+        request_params,
+        image_bytes,
+        image.filename,
+        mask_data=mask_bytes,
+        mask_filename=mask.filename if mask else None,
+    )
+
+
+@router.post("/v1/images/variations")
+async def image_variations(
+    request: Request,
+    image: UploadFile = File(...),
+    model: Optional[str] = Form(None),
+    n: Optional[int] = Form(None),
+    size: Optional[str] = Form(None),
+    response_format: Optional[str] = Form(None),
+    user: Optional[str] = Form(None),
+):
+    model_name_to_use = model if model else "openai"
+    module = get_module(request, {"model": model_name_to_use})
+    method = _require_module_method(module, "generate_image_variation")
+
+    image_bytes = await image.read()
+    request_params = {"model": model_name_to_use}
+    if n is not None:
+        request_params["n"] = n
+    if size:
+        request_params["size"] = size
+    if response_format:
+        request_params["response_format"] = response_format
+    if user:
+        request_params["user"] = user
+
+    return await method(request_params, image_bytes, image.filename)
+
 @router.post("/v1/audio/transcriptions")
 async def audio_transcription(
     request: Request,
@@ -263,3 +340,19 @@ async def audio_translation(
         request_params["temperature"] = temperature
         
     return await module.audio_translation(request_params, file_bytes, file.filename)
+
+
+@router.post("/v1/audio/speech")
+async def audio_speech(request: Request):
+    body = await request.json()
+    module = get_module(request, body)
+    method = _require_module_method(module, "audio_speech")
+    return await method(body)
+
+
+@router.post("/v1/responses")
+async def responses(request: Request):
+    body = await request.json()
+    module = get_module(request, body)
+    method = _require_module_method(module, "responses")
+    return await method(body)

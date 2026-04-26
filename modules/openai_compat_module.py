@@ -898,3 +898,149 @@ class OpenAICompatModule(BaseModule):
         except Exception as e:
             logger.error(f"Error during audio translation for instance {instance_name}: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Audio translation failed: {str(e)}")
+
+    async def _post_multipart_to_instance(
+        self,
+        instance_name: str,
+        endpoint_path: str,
+        data_payload: Dict[str, Any],
+        files_payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        instance_config = self._get_instance_config(instance_name)
+        if not instance_config:
+            raise HTTPException(status_code=400, detail=f"Instance '{instance_name}' not found.")
+
+        base_url = instance_config["base_url"]
+        api_key = self._get_instance_api_key(instance_name)
+        target_url = f"{base_url.rstrip('/')}{endpoint_path}"
+        headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+
+        httpx_proxies = None
+        current_proxy_config = None
+        if self.proxy_manager.active:
+            current_proxy_config = self.proxy_manager.get_proxy()
+            httpx_proxies = self._get_httpx_proxies(current_proxy_config)
+
+        client_args = {"timeout": 60.0}
+        if httpx_proxies:
+            proxy_url_for_transport = httpx_proxies.get("http://")
+            if proxy_url_for_transport and proxy_url_for_transport.startswith(("socks5://", "socks4://")):
+                transport = AsyncProxyTransport.from_url(proxy_url_for_transport)
+                client_args["transport"] = transport
+            else:
+                client_args["proxies"] = httpx_proxies
+
+        try:
+            async with httpx.AsyncClient(**client_args) as client:
+                response = await client.post(target_url, headers=headers, data=data_payload, files=files_payload)
+                response.raise_for_status()
+                return response.json()
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTPStatusError during multipart request for instance {instance_name}: {e.response.text}")
+            raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+        except Exception as e:
+            logger.error(f"Error during multipart request for instance {instance_name}: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Multipart request failed: {str(e)}")
+
+    async def generate_image_edit(
+        self,
+        request_params: Dict[str, Any],
+        image_data: bytes,
+        image_filename: str,
+        mask_data: Optional[bytes] = None,
+        mask_filename: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        model_identifier = request_params.get("model", "")
+        instance_name, actual_model_name = self.parse_instance_and_model_id(model_identifier)
+        if not instance_name:
+            if self.instances_config:
+                instance_name = self.instances_config[0]["name"]
+            else:
+                raise HTTPException(status_code=500, detail="No OpenAI Compatible instances configured for image edits.")
+
+        if actual_model_name:
+            instance_name, actual_model_name = self._resolve_instance_and_model(instance_name, actual_model_name)
+
+        rewritten = dict(request_params)
+        if actual_model_name:
+            rewritten["model"] = actual_model_name
+
+        data_payload = {k: str(v) for k, v in rewritten.items() if v is not None}
+        files_payload = {"image": (image_filename, image_data)}
+        if mask_data is not None:
+            files_payload["mask"] = (mask_filename or "mask.png", mask_data)
+
+        return await self._post_multipart_to_instance(instance_name, "/images/edits", data_payload, files_payload)
+
+    async def generate_image_variation(
+        self,
+        request_params: Dict[str, Any],
+        image_data: bytes,
+        image_filename: str,
+    ) -> Dict[str, Any]:
+        model_identifier = request_params.get("model", "")
+        instance_name, actual_model_name = self.parse_instance_and_model_id(model_identifier)
+        if not instance_name:
+            if self.instances_config:
+                instance_name = self.instances_config[0]["name"]
+            else:
+                raise HTTPException(status_code=500, detail="No OpenAI Compatible instances configured for image variations.")
+
+        if actual_model_name:
+            instance_name, actual_model_name = self._resolve_instance_and_model(instance_name, actual_model_name)
+
+        rewritten = dict(request_params)
+        if actual_model_name:
+            rewritten["model"] = actual_model_name
+
+        data_payload = {k: str(v) for k, v in rewritten.items() if v is not None}
+        files_payload = {"image": (image_filename, image_data)}
+
+        return await self._post_multipart_to_instance(instance_name, "/images/variations", data_payload, files_payload)
+
+    async def audio_speech(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        model_identifier = request.get("model", "")
+        instance_name, actual_model_name = self.parse_instance_and_model_id(model_identifier)
+        if not instance_name:
+            if self.instances_config:
+                instance_name = self.instances_config[0]["name"]
+            else:
+                raise HTTPException(status_code=500, detail="No OpenAI Compatible instances configured for audio speech.")
+
+        if actual_model_name:
+            instance_name, actual_model_name = self._resolve_instance_and_model(instance_name, actual_model_name)
+
+        payload_to_send = dict(request)
+        if actual_model_name:
+            payload_to_send["model"] = actual_model_name
+
+        return await self._execute_non_streaming_with_rotation(instance_name, "POST", "/audio/speech", payload_to_send)
+
+    async def responses(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        model_identifier = request.get("model", "")
+        instance_name, actual_model_name = self.parse_instance_and_model_id(model_identifier)
+        if not instance_name:
+            if self.instances_config:
+                instance_name = self.instances_config[0]["name"]
+            else:
+                raise HTTPException(status_code=500, detail="No OpenAI Compatible instances configured for responses.")
+
+        if actual_model_name:
+            resolved_targets = self._resolve_model_targets(instance_name, actual_model_name)
+        else:
+            resolved_targets = [(instance_name, actual_model_name)]
+
+        last_exc = None
+        repeat_count = 2
+        for _ in range(repeat_count):
+            for target_instance, target_model in resolved_targets:
+                payload_to_send = dict(request)
+                if target_model:
+                    payload_to_send["model"] = target_model
+                try:
+                    return await self._execute_non_streaming_with_rotation(target_instance, "POST", "/responses", payload_to_send)
+                except Exception as exc:
+                    last_exc = exc
+                    logger.warning(f"Failsafe for responses: instance '{target_instance}' failed: {exc}")
+
+        raise HTTPException(status_code=503, detail=f"All response providers are unavailable. Details: {last_exc}")

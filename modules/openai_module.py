@@ -237,6 +237,40 @@ class OpenAIChatModule(BaseModule):
     async def generate_image(self, request: Dict[str, Any]) -> Dict[str, Any]:
         return await self._execute_with_rotation(lambda: openai.Image.create(**request))
 
+    async def generate_image_edit(
+        self,
+        request_params: Dict[str, Any],
+        image_data: bytes,
+        image_filename: str,
+        mask_data: Optional[bytes] = None,
+        mask_filename: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        req_copy = request_params.copy()
+        with io.BytesIO(image_data) as image_file:
+            image_file.name = image_filename or "image.png"
+            if mask_data is not None:
+                with io.BytesIO(mask_data) as mask_file:
+                    mask_file.name = mask_filename or "mask.png"
+                    return await self._execute_with_rotation(
+                        lambda: openai.Image.create_edit(image=image_file, mask=mask_file, **req_copy)
+                    )
+            return await self._execute_with_rotation(
+                lambda: openai.Image.create_edit(image=image_file, **req_copy)
+            )
+
+    async def generate_image_variation(
+        self,
+        request_params: Dict[str, Any],
+        image_data: bytes,
+        image_filename: str,
+    ) -> Dict[str, Any]:
+        req_copy = request_params.copy()
+        with io.BytesIO(image_data) as image_file:
+            image_file.name = image_filename or "image.png"
+            return await self._execute_with_rotation(
+                lambda: openai.Image.create_variation(image=image_file, **req_copy)
+            )
+
     async def audio_transcription(self, request: Dict[str, Any], file_data: bytes) -> Dict[str, Any]:
         req_copy = request.copy()
         filename = req_copy.pop("filename", "audio.mp3")
@@ -254,3 +288,20 @@ class OpenAIChatModule(BaseModule):
             return await self._execute_with_rotation(
                 lambda: openai.Audio.translate(file=audio_file, **req_copy)
             )
+
+    async def audio_speech(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        raise HTTPException(
+            status_code=501,
+            detail="audio/speech is not supported by legacy openai<1 SDK module. Use OAIC provider.",
+        )
+
+    async def responses(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        if "messages" in request or "input" in request:
+            mapped = dict(request)
+            if "input" in mapped and "messages" not in mapped:
+                mapped["messages"] = [{"role": "user", "content": str(mapped["input"])}]
+            return await self.chat_completion(mapped)
+        raise HTTPException(
+            status_code=501,
+            detail="responses endpoint needs messages/input for legacy openai module.",
+        )
