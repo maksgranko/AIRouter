@@ -1,5 +1,4 @@
 import httpx
-from httpx_socks import AsyncProxyTransport
 from typing import Dict, Any, Optional, AsyncGenerator, List
 
 from .base_module import BaseModule
@@ -20,6 +19,7 @@ from .oaic_routing import (
     resolve_model_targets as resolve_oaic_model_targets,
     build_failsafe_chain as build_oaic_failsafe_chain,
 )
+from .httpx_client_utils import get_httpx_proxies, build_async_client_args
 
 logger = logging.getLogger(__name__)
 
@@ -54,18 +54,7 @@ class OpenAICompatModule(BaseModule):
         return "OAIC"
 
     def _get_httpx_proxies(self, proxy_config: Optional[ProxyConfig]) -> Optional[Dict[str, str]]:
-        if proxy_config:
-            if proxy_config['type'] in ['http', 'https']:
-                 return {
-                    "http://": proxy_config['url'],
-                    "https://": proxy_config['url'],
-                }
-            elif proxy_config['type'] in ['socks4', 'socks5']:
-                return {
-                    "http://": proxy_config['url'],
-                    "https://": proxy_config['url'],
-                }
-        return None
+        return get_httpx_proxies(proxy_config)
 
     def _get_instance_config(self, instance_name: str) -> Optional[Dict[str, Any]]:
         return get_oaic_instance_config(self.instances_config, instance_name, include_disabled=False)
@@ -100,6 +89,24 @@ class OpenAICompatModule(BaseModule):
 
     def _build_failsafe_chain(self, primary_instance: str) -> List[str]:
         return build_oaic_failsafe_chain(self.instances_config, primary_instance)
+
+    def _build_attempt_plan(self, resolved_targets: List[tuple]) -> List[tuple]:
+        if not resolved_targets:
+            return []
+        if len(resolved_targets) > 1:
+            return [
+                (target_instance, [target_instance], target_model)
+                for target_instance, target_model in resolved_targets
+            ]
+
+        instance_name, model_name = resolved_targets[0]
+        return [(instance_name, self._build_failsafe_chain(instance_name), model_name)]
+
+    @staticmethod
+    def _iter_attempt_candidates(attempt_plan: List[tuple]):
+        for target_instance, failsafe_chain, target_model in attempt_plan:
+            for current_instance in failsafe_chain:
+                yield target_instance, current_instance, target_model
 
     # TODO: ApiKeyManager должен быть адаптирован для работы с ключами инстансов
     def _get_instance_api_key(self, instance_name: str) -> Optional[str]:
@@ -145,16 +152,7 @@ class OpenAICompatModule(BaseModule):
         proxy_url_for_log = current_proxy_config['url'] if current_proxy_config else "None (Direct)"
         logger.debug(f"Attempting OpenAI Compatible API call for instance '{instance_name}': {method} {url} with key {key_tail_for_log}, proxy {proxy_url_for_log}")
         try:
-            client_args = {"timeout": 60.0}
-            transport = None
-            if httpx_proxies:
-                proxy_url_for_transport = httpx_proxies.get("http://") 
-                if proxy_url_for_transport and proxy_url_for_transport.startswith(("socks5://", "socks4://")):
-                    logger.debug(f"Creating AsyncProxyTransport for SOCKS: {proxy_url_for_transport}")
-                    transport = AsyncProxyTransport.from_url(proxy_url_for_transport)
-                    client_args["transport"] = transport
-                else:
-                    client_args["proxies"] = httpx_proxies
+            client_args = build_async_client_args(httpx_proxies, timeout=60.0)
 
             logger.debug(f"httpx version: {httpx.__version__}")
             logger.debug(f"AsyncClient arguments: {client_args}")
@@ -278,16 +276,7 @@ class OpenAICompatModule(BaseModule):
         proxy_url_for_log = current_proxy_config['url'] if current_proxy_config else "None (Direct)"
         logger.debug(f"Attempting OpenAI Compatible API stream for instance '{instance_name}': POST {url} with key {key_tail_for_log}, proxy {proxy_url_for_log}")
         try:
-            client_args = {"timeout": 60.0}
-            transport_stream = None
-            if httpx_proxies:
-                proxy_url_for_transport_stream = httpx_proxies.get("http://")
-                if proxy_url_for_transport_stream and proxy_url_for_transport_stream.startswith(("socks5://", "socks4://")):
-                    logger.debug(f"Creating AsyncProxyTransport for SOCKS stream: {proxy_url_for_transport_stream}")
-                    transport_stream = AsyncProxyTransport.from_url(proxy_url_for_transport_stream)
-                    client_args["transport"] = transport_stream
-                else:
-                    client_args["proxies"] = httpx_proxies
+            client_args = build_async_client_args(httpx_proxies, timeout=60.0)
 
             logger.debug(f"httpx version for stream: {httpx.__version__}")
             logger.debug(f"AsyncClient arguments for stream: {client_args}")
@@ -393,17 +382,12 @@ class OpenAICompatModule(BaseModule):
 
         logger.debug(f"OpenAI Compatible chat_completion for instance '{instance_name}', model '{actual_model_name}'. Request: {payload_to_send}")
 
-        explicit_route_chain = len(resolved_targets) > 1
-        if explicit_route_chain:
-            attempt_plan = [(target_instance, [target_instance], target_model) for target_instance, target_model in resolved_targets]
-        else:
-            attempt_plan = [(instance_name, self._build_failsafe_chain(instance_name), actual_model_name)]
+        attempt_plan = self._build_attempt_plan(resolved_targets)
 
         last_exc = None
         repeat_count = 2
         for i in range(0,repeat_count):
-            for target_instance, failsafe_chain, target_model in attempt_plan:
-                for current_instance in failsafe_chain:
+            for target_instance, current_instance, target_model in self._iter_attempt_candidates(attempt_plan):
                     try:
                         payload_for_attempt = dict(payload_to_send)
                         payload_for_attempt["model"] = target_model
@@ -536,17 +520,12 @@ class OpenAICompatModule(BaseModule):
         payload_to_send = dict(request)
         payload_to_send["model"] = actual_model_name
 
-        explicit_route_chain = len(resolved_targets) > 1
-        if explicit_route_chain:
-            attempt_plan = [(target_instance, [target_instance], target_model) for target_instance, target_model in resolved_targets]
-        else:
-            attempt_plan = [(instance_name, self._build_failsafe_chain(instance_name), actual_model_name)]
+        attempt_plan = self._build_attempt_plan(resolved_targets)
 
         last_exc = None
         repeat_count = 2
         for i in range(0,repeat_count):
-            for target_instance, failsafe_chain, target_model in attempt_plan:
-                for current_instance in failsafe_chain:
+            for target_instance, current_instance, target_model in self._iter_attempt_candidates(attempt_plan):
                     try:
                         payload_for_attempt = dict(payload_to_send)
                         payload_for_attempt["model"] = target_model
@@ -665,14 +644,7 @@ class OpenAICompatModule(BaseModule):
             current_proxy_config = self.proxy_manager.get_proxy()
             httpx_proxies = self._get_httpx_proxies(current_proxy_config)
 
-        client_args = {"timeout": 60.0}
-        if httpx_proxies:
-            proxy_url_for_transport = httpx_proxies.get("http://")
-            if proxy_url_for_transport and proxy_url_for_transport.startswith(("socks5://", "socks4://")):
-                transport = AsyncProxyTransport.from_url(proxy_url_for_transport)
-                client_args["transport"] = transport
-            else:
-                client_args["proxies"] = httpx_proxies
+        client_args = build_async_client_args(httpx_proxies, timeout=60.0)
 
         try:
             async with httpx.AsyncClient(**client_args) as client:
@@ -722,14 +694,7 @@ class OpenAICompatModule(BaseModule):
             current_proxy_config = self.proxy_manager.get_proxy()
             httpx_proxies = self._get_httpx_proxies(current_proxy_config)
 
-        client_args = {"timeout": 60.0}
-        if httpx_proxies:
-            proxy_url_for_transport = httpx_proxies.get("http://")
-            if proxy_url_for_transport and proxy_url_for_transport.startswith(("socks5://", "socks4://")):
-                transport = AsyncProxyTransport.from_url(proxy_url_for_transport)
-                client_args["transport"] = transport
-            else:
-                client_args["proxies"] = httpx_proxies
+        client_args = build_async_client_args(httpx_proxies, timeout=60.0)
 
         try:
             async with httpx.AsyncClient(**client_args) as client:
@@ -765,14 +730,7 @@ class OpenAICompatModule(BaseModule):
             current_proxy_config = self.proxy_manager.get_proxy()
             httpx_proxies = self._get_httpx_proxies(current_proxy_config)
 
-        client_args = {"timeout": 60.0}
-        if httpx_proxies:
-            proxy_url_for_transport = httpx_proxies.get("http://")
-            if proxy_url_for_transport and proxy_url_for_transport.startswith(("socks5://", "socks4://")):
-                transport = AsyncProxyTransport.from_url(proxy_url_for_transport)
-                client_args["transport"] = transport
-            else:
-                client_args["proxies"] = httpx_proxies
+        client_args = build_async_client_args(httpx_proxies, timeout=60.0)
 
         try:
             async with httpx.AsyncClient(**client_args) as client:
@@ -874,17 +832,19 @@ class OpenAICompatModule(BaseModule):
         else:
             resolved_targets = [(instance_name, actual_model_name)]
 
+        attempt_plan = self._build_attempt_plan(resolved_targets)
+
         last_exc = None
         repeat_count = 2
         for _ in range(repeat_count):
-            for target_instance, target_model in resolved_targets:
+            for target_instance, current_instance, target_model in self._iter_attempt_candidates(attempt_plan):
                 payload_to_send = dict(request)
                 if target_model:
                     payload_to_send["model"] = target_model
                 try:
-                    return await self._execute_non_streaming_with_rotation(target_instance, "POST", "/responses", payload_to_send)
+                    return await self._execute_non_streaming_with_rotation(current_instance, "POST", "/responses", payload_to_send)
                 except Exception as exc:
                     last_exc = exc
-                    logger.warning(f"Failsafe for responses: instance '{target_instance}' failed: {exc}")
+                    logger.warning(f"Failsafe for responses: instance '{current_instance}' failed: {exc}")
 
         raise HTTPException(status_code=503, detail=f"All response providers are unavailable. Details: {last_exc}")

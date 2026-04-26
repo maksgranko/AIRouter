@@ -1,7 +1,4 @@
 import httpx
-from httpx_socks import AsyncProxyTransport
-import httpx
-from httpx_socks import AsyncProxyTransport
 from typing import Dict, Any, Optional, AsyncGenerator, List
 from .base_module import BaseModule
 from api_key_manager import ApiKeyManager
@@ -16,6 +13,10 @@ import random
 from handlers.misc.one_messager import reformat_messages
 # Импортируем функцию для получения настроек reformat_messages
 from admin_router import get_reformat_settings
+from .httpx_client_utils import get_httpx_proxies, build_async_client_args
+from utils.config_store import read_json
+from .key_cycle_utils import init_first_cycle_key, rotate_key_and_detect_full_cycle
+from .retry_utils import map_httpx_exception_to_status, advance_proxy_or_key, with_reason, raise_http_with_reason
 
 logger = logging.getLogger(__name__)
 
@@ -36,18 +37,39 @@ class GeminiChatModule(BaseModule):
         return self.service_name
 
     def _get_httpx_proxies(self, proxy_config: Optional[ProxyConfig]) -> Optional[Dict[str, str]]:
-        if proxy_config:
-            if proxy_config['type'] in ['http', 'https']:
-                 return {
-                    "http://": proxy_config['url'],
-                    "https://": proxy_config['url'],
-                }
-            elif proxy_config['type'] in ['socks4', 'socks5']:
-                return {
-                    "http://": proxy_config['url'],
-                    "https://": proxy_config['url'],
-                }
-        return None
+        return get_httpx_proxies(proxy_config)
+
+    def _load_settings_snapshot(self) -> Dict[str, Any]:
+        settings = read_json(self.settings_file_path, {})
+        return settings if isinstance(settings, dict) else {}
+
+    def _use_global_proxy_for_module(self) -> bool:
+        settings = self._load_settings_snapshot()
+        return settings.get("module_proxy_usage", {}).get(self.service_name, True)
+
+    def _is_force_proxy_rotation_enabled(self) -> bool:
+        settings = self._load_settings_snapshot()
+        return settings.get("proxy_settings", {}).get("force_proxy_rotation_after_request", False)
+
+    def _resolve_proxy_context(self):
+        current_proxy_config = None
+        httpx_proxies = None
+        if self._use_global_proxy_for_module() and self.proxy_manager.active:
+            current_proxy_config = self.proxy_manager.get_proxy()
+            httpx_proxies = self._get_httpx_proxies(current_proxy_config)
+        proxy_url_for_log = current_proxy_config['url'] if current_proxy_config else "None (Direct)"
+        return current_proxy_config, httpx_proxies, proxy_url_for_log
+
+    def _maybe_force_rotate_proxy_after_success(self, context_label: str):
+        if not self._is_force_proxy_rotation_enabled():
+            return
+        if self.proxy_manager.current_rotation_mode == "failover_cycle":
+            return
+        if self.proxy_manager.select_random_proxy_each_request:
+            return
+        if self.proxy_manager.active and self.proxy_manager.proxies:
+            logger.debug("Force rotating proxy after successful call as per settings (%s).", context_label)
+            self.proxy_manager.rotate_proxy()
 
     async def _execute_non_streaming_with_rotation(
         self,
@@ -57,17 +79,19 @@ class GeminiChatModule(BaseModule):
     ) -> Dict[str, Any]:
         key_exhausted_message = f"All API keys for {self.service_name} are exhausted or failed."
 
-        if self.key_loop_initial_run:
-            self.first_key_in_overall_cycle = self.api_key_manager.get_key(self.service_name, peek=True)
-            self.key_loop_initial_run = False
+        self.first_key_in_overall_cycle, self.key_loop_initial_run = init_first_cycle_key(
+            self.api_key_manager,
+            self.service_name,
+            self.first_key_in_overall_cycle,
+            self.key_loop_initial_run,
+        )
 
         key_was_rotated_in_current_api_call = False
 
         while True:
             current_api_key = self.api_key_manager.get_key(self.service_name)
             if not current_api_key:
-                logger.error(key_exhausted_message + " (No keys available at start of key loop for Gemini non-streaming)")
-                raise HTTPException(status_code=503, detail=key_exhausted_message + " (No keys available at start of key loop for Gemini non-streaming)")
+                raise_http_with_reason(503, key_exhausted_message, "No keys available at start of key loop for Gemini non-streaming", logger)
 
             if self.last_api_key_used_for_proxy_context != current_api_key or key_was_rotated_in_current_api_call:
                 logger.debug(f"API key changed or rotated for {self.service_name} (non-streaming). Old: {self.last_api_key_used_for_proxy_context}, New: {current_api_key}. Resetting proxies.")
@@ -77,35 +101,13 @@ class GeminiChatModule(BaseModule):
                     key_was_rotated_in_current_api_call = False
 
             while True:
-                current_proxy_config = None
-                httpx_proxies = None
-                # Индивидуальная настройка прокси
-                use_global_proxy = True
-                try:
-                    with open(self.settings_file_path, 'r') as f:
-                        settings_data = json.load(f)
-                        use_global_proxy = settings_data.get("module_proxy_usage", {}).get(self.service_name, True)
-                except Exception as e:
-                    logger.error(f"Error reading module_proxy_usage for {self.service_name}: {e} (defaulting to True)")
-                if use_global_proxy and self.proxy_manager.active:
-                    current_proxy_config = self.proxy_manager.get_proxy()
-                    httpx_proxies = self._get_httpx_proxies(current_proxy_config)
+                current_proxy_config, httpx_proxies, proxy_url_for_log = self._resolve_proxy_context()
 
                 headers = {"Content-Type": "application/json", "x-goog-api-key": current_api_key}
                 url = f"{GEMINI_API_BASE_URL}{endpoint_path}"
-                proxy_url_for_log = current_proxy_config['url'] if current_proxy_config else "None (Direct)"
                 logger.debug(f"Attempting Gemini API call: {method} {url} with key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}")
                 try:
-                    client_args = {"timeout": 60.0}
-                    transport = None
-                    if httpx_proxies:
-                        proxy_url_for_transport = httpx_proxies.get("http://")
-                        if proxy_url_for_transport and proxy_url_for_transport.startswith(("socks5://", "socks4://")):
-                            logger.debug(f"Creating AsyncProxyTransport for SOCKS: {proxy_url_for_transport}")
-                            transport = AsyncProxyTransport.from_url(proxy_url_for_transport)
-                            client_args["transport"] = transport
-                        else:
-                            client_args["proxies"] = httpx_proxies
+                    client_args = build_async_client_args(httpx_proxies, timeout=60.0)
 
                     logger.debug(f"httpx version: {httpx.__version__}")
                     logger.debug(f"AsyncClient arguments: {client_args}")
@@ -122,20 +124,7 @@ class GeminiChatModule(BaseModule):
                         response_data = response.json()
                         logger.info(f"Gemini API call successful for {self.service_name} with key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}.")
 
-                        force_rotation_enabled = False
-                        try:
-                            with open(self.settings_file_path, 'r') as f:
-                                settings_data_json = json.load(f)
-                                force_rotation_enabled = settings_data_json.get("proxy_settings", {}).get("force_proxy_rotation_after_request", False)
-                        except Exception as e_settings:
-                            logger.error(f"Could not read force_proxy_rotation_after_request from {self.settings_file_path} for Gemini (non-streaming): {e_settings}. Defaulting to False.")
-
-                        if force_rotation_enabled and \
-                           self.proxy_manager.current_rotation_mode != "failover_cycle" and \
-                           not self.proxy_manager.select_random_proxy_each_request:
-                           if self.proxy_manager.active and self.proxy_manager.proxies:
-                               logger.debug("Force rotating proxy after successful call as per settings (Gemini non-streaming).")
-                               self.proxy_manager.rotate_proxy()
+                        self._maybe_force_rotate_proxy_after_success("Gemini non-streaming")
                         return response_data
                 except httpx.HTTPStatusError as e:
                     error_response_data = {}
@@ -147,13 +136,18 @@ class GeminiChatModule(BaseModule):
                     if status_code in [401, 403]:
                         logger.warning(f"Key error for {self.service_name} (key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}): HTTP {status_code} - {error_detail}. Rotating key.")
                         previous_key_for_check = current_api_key
-                        if not self.api_key_manager.rotate_key(self.service_name):
-                            raise HTTPException(status_code=503, detail=key_exhausted_message + " (No keys to rotate to after auth error)")
+                        rotated, full_cycle_completed = rotate_key_and_detect_full_cycle(
+                            self.api_key_manager,
+                            self.service_name,
+                            self.first_key_in_overall_cycle,
+                            previous_key_for_check,
+                        )
+                        if not rotated:
+                            raise_http_with_reason(503, key_exhausted_message, "No keys to rotate to after auth error")
                         key_was_rotated_in_current_api_call = True
-                        current_api_key_after_rotation = self.api_key_manager.get_key(self.service_name, peek=True)
-                        if current_api_key_after_rotation == self.first_key_in_overall_cycle and current_api_key_after_rotation != previous_key_for_check:
+                        if full_cycle_completed:
                             logger.warning(f"Completed a full cycle of API keys for {self.service_name} (non-streaming) due to HTTP {status_code}. All keys failed. Raising final exception.")
-                            raise HTTPException(status_code=status_code, detail=f"{key_exhausted_message} (Full key cycle for HTTP {status_code})")
+                            raise HTTPException(status_code=status_code, detail=with_reason(key_exhausted_message, f"Full key cycle for HTTP {status_code}"))
                         break
 
                     elif 400 <= status_code < 500 and status_code != 429:
@@ -162,66 +156,90 @@ class GeminiChatModule(BaseModule):
 
                     else:
                         logger.warning(f"HTTPStatusError (status {status_code}, type {type(e).__name__}) for {self.service_name} (key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}): {error_detail}. Attempting proxy rotation.")
-                        if self.proxy_manager.active and self.proxy_manager.rotate_proxy():
+                        rotation_outcome, full_cycle_completed = advance_proxy_or_key(
+                            self.proxy_manager,
+                            self.api_key_manager,
+                            self.service_name,
+                            self.first_key_in_overall_cycle,
+                            current_api_key,
+                        )
+                        if rotation_outcome == "proxy_rotated":
                             logger.info(f"Successfully rotated to next proxy for key ...{current_api_key[-4:]}. Retrying.")
                             continue
-                        else:
-                            logger.warning(f"Failed to rotate proxy or proxies exhausted for key ...{current_api_key[-4:]}. Attempting key rotation.")
-                            previous_key_for_check = current_api_key
-                            if not self.api_key_manager.rotate_key(self.service_name):
-                                final_err_msg = f"{key_exhausted_message} (HTTPStatusError {status_code} on all proxies/keys, no keys to rotate to)"
-                                logger.error(final_err_msg)
-                                raise HTTPException(status_code=status_code if status_code in [429, 502, 503, 504] else 500, detail=final_err_msg)
-                            key_was_rotated_in_current_api_call = True
-                            current_api_key_after_rotation = self.api_key_manager.get_key(self.service_name, peek=True)
-                            if current_api_key_after_rotation == self.first_key_in_overall_cycle and current_api_key_after_rotation != previous_key_for_check:
-                                logger.warning(f"Completed a full cycle of API keys for {self.service_name} (non-streaming) due to HTTPStatusError {status_code}. All keys failed. Raising final exception.")
-                                raise HTTPException(status_code=status_code if status_code in [429, 502, 503, 504] else 500, detail=f"{key_exhausted_message} (Full key cycle for HTTPStatusError {status_code})")
-                            break
+                        logger.warning(f"Failed to rotate proxy or proxies exhausted for key ...{current_api_key[-4:]}. Attempting key rotation.")
+                        if rotation_outcome == "key_exhausted":
+                            raise_http_with_reason(
+                                status_code if status_code in [429, 502, 503, 504] else 500,
+                                key_exhausted_message,
+                                f"HTTPStatusError {status_code} on all proxies/keys, no keys to rotate to",
+                                logger,
+                            )
+                        key_was_rotated_in_current_api_call = True
+                        if full_cycle_completed:
+                            logger.warning(f"Completed a full cycle of API keys for {self.service_name} (non-streaming) due to HTTPStatusError {status_code}. All keys failed. Raising final exception.")
+                            raise HTTPException(status_code=status_code if status_code in [429, 502, 503, 504] else 500, detail=with_reason(key_exhausted_message, f"Full key cycle for HTTPStatusError {status_code}"))
+                        break
 
                 except (httpx.RequestError, Exception) as e:
                     error_type_name = type(e).__name__
                     logger.warning(f"{error_type_name} for {self.service_name} (key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}): {str(e)}. Attempting proxy rotation.")
-                    if self.proxy_manager.active and self.proxy_manager.rotate_proxy():
+                    status_code_for_exc = map_httpx_exception_to_status(e)
+                    rotation_outcome, full_cycle_completed = advance_proxy_or_key(
+                        self.proxy_manager,
+                        self.api_key_manager,
+                        self.service_name,
+                        self.first_key_in_overall_cycle,
+                        current_api_key,
+                    )
+                    if rotation_outcome == "proxy_rotated":
                         logger.info(f"Successfully rotated to next proxy for key ...{current_api_key[-4:]} after {error_type_name}. Retrying.")
                         continue
-                    else:
-                        logger.warning(f"Failed to rotate proxy or proxies exhausted for key ...{current_api_key[-4:]} after {error_type_name}. Attempting key rotation.")
-                        previous_key_for_check = current_api_key
-                        if not self.api_key_manager.rotate_key(self.service_name):
-                            final_err_msg = f"{key_exhausted_message} ({error_type_name} on all proxies/keys, no keys to rotate to)"
-                            logger.error(final_err_msg)
-                            status_code_for_exc = 504 if isinstance(e, httpx.TimeoutException) else 502 if isinstance(e, (httpx.NetworkError, httpx.ConnectError, httpx.ProxyError)) else 500
-                            raise HTTPException(status_code=status_code_for_exc, detail=final_err_msg)
-                        key_was_rotated_in_current_api_call = True
-                        current_api_key_after_rotation = self.api_key_manager.get_key(self.service_name, peek=True)
-                        if current_api_key_after_rotation == self.first_key_in_overall_cycle and current_api_key_after_rotation != previous_key_for_check:
-                            logger.warning(f"Completed a full cycle of API keys for {self.service_name} (non-streaming) due to {error_type_name}. All keys failed. Raising final exception.")
-                            raise HTTPException(status_code=status_code_for_exc, detail=f"{key_exhausted_message} (Full key cycle for {error_type_name})")
-                        break
+                    logger.warning(f"Failed to rotate proxy or proxies exhausted for key ...{current_api_key[-4:]} after {error_type_name}. Attempting key rotation.")
+                    if rotation_outcome == "key_exhausted":
+                        raise_http_with_reason(
+                            status_code_for_exc,
+                            key_exhausted_message,
+                            f"{error_type_name} on all proxies/keys, no keys to rotate to",
+                            logger,
+                        )
+                    key_was_rotated_in_current_api_call = True
+                    if full_cycle_completed:
+                        logger.warning(f"Completed a full cycle of API keys for {self.service_name} (non-streaming) due to {error_type_name}. All keys failed. Raising final exception.")
+                        raise HTTPException(status_code=status_code_for_exc, detail=with_reason(key_exhausted_message, f"Full key cycle for {error_type_name}"))
+                    break
 
                 if not self.proxy_manager.active:
                     logger.debug(f"Direct call failed for key ...{current_api_key[-4:]} (proxies inactive). Rotating key.")
                     previous_key_for_check = current_api_key
-                    if not self.api_key_manager.rotate_key(self.service_name):
-                        raise HTTPException(status_code=503, detail=key_exhausted_message + " (Direct call failed, no more keys)")
+                    rotated, full_cycle_completed = rotate_key_and_detect_full_cycle(
+                        self.api_key_manager,
+                        self.service_name,
+                        self.first_key_in_overall_cycle,
+                        previous_key_for_check,
+                    )
+                    if not rotated:
+                        raise_http_with_reason(503, key_exhausted_message, "Direct call failed, no more keys")
                     key_was_rotated_in_current_api_call = True
-                    current_api_key_after_rotation = self.api_key_manager.get_key(self.service_name, peek=True)
-                    if current_api_key_after_rotation == self.first_key_in_overall_cycle and current_api_key_after_rotation != previous_key_for_check:
+                    if full_cycle_completed:
                         logger.warning(f"Completed a full cycle of API keys for {self.service_name} (non-streaming, direct call failed). All keys failed.")
-                        raise HTTPException(status_code=503, detail=f"{key_exhausted_message} (Full key cycle, direct calls failed)")
+                        raise HTTPException(status_code=503, detail=with_reason(key_exhausted_message, "Full key cycle, direct calls failed"))
                     break
 
                 if current_proxy_config is None and self.proxy_manager.proxies:
                      logger.debug(f"All proxies tried for key ...{current_api_key[-4:]} (non-streaming). Rotating key.")
                      previous_key_for_check = current_api_key
-                     if not self.api_key_manager.rotate_key(self.service_name):
-                         raise HTTPException(status_code=503, detail=key_exhausted_message + " (All proxies tried, no more keys)")
+                     rotated, full_cycle_completed = rotate_key_and_detect_full_cycle(
+                         self.api_key_manager,
+                         self.service_name,
+                         self.first_key_in_overall_cycle,
+                         previous_key_for_check,
+                     )
+                     if not rotated:
+                         raise_http_with_reason(503, key_exhausted_message, "All proxies tried, no more keys")
                      key_was_rotated_in_current_api_call = True
-                     current_api_key_after_rotation = self.api_key_manager.get_key(self.service_name, peek=True)
-                     if current_api_key_after_rotation == self.first_key_in_overall_cycle and current_api_key_after_rotation != previous_key_for_check:
+                     if full_cycle_completed:
                         logger.warning(f"Completed a full cycle of API keys for {self.service_name} (non-streaming, all proxies tried). All keys failed.")
-                        raise HTTPException(status_code=503, detail=f"{key_exhausted_message} (Full key cycle, all proxies tried)")
+                        raise HTTPException(status_code=503, detail=with_reason(key_exhausted_message, "Full key cycle, all proxies tried"))
                      break
 
     async def _execute_streaming_with_rotation(
@@ -231,17 +249,19 @@ class GeminiChatModule(BaseModule):
     ) -> AsyncGenerator[Dict[str, Any], None]:
         key_exhausted_message = f"All API keys for {self.service_name} are exhausted or failed."
 
-        if self.key_loop_initial_run:
-            self.first_key_in_overall_cycle = self.api_key_manager.get_key(self.service_name, peek=True)
-            self.key_loop_initial_run = False
+        self.first_key_in_overall_cycle, self.key_loop_initial_run = init_first_cycle_key(
+            self.api_key_manager,
+            self.service_name,
+            self.first_key_in_overall_cycle,
+            self.key_loop_initial_run,
+        )
 
         key_was_rotated_in_current_api_call = False
 
         while True:
             current_api_key = self.api_key_manager.get_key(self.service_name)
             if not current_api_key:
-                logger.error(key_exhausted_message + " (No keys available at start of key loop for Gemini streaming)")
-                raise HTTPException(status_code=503, detail=key_exhausted_message + " (No keys available at start of key loop for Gemini streaming)")
+                raise_http_with_reason(503, key_exhausted_message, "No keys available at start of key loop for Gemini streaming", logger)
 
             if self.last_api_key_used_for_proxy_context != current_api_key or key_was_rotated_in_current_api_call:
                 logger.debug(f"API key changed or rotated for {self.service_name} (streaming). Old: {self.last_api_key_used_for_proxy_context}, New: {current_api_key}. Resetting proxies.")
@@ -251,19 +271,7 @@ class GeminiChatModule(BaseModule):
                     key_was_rotated_in_current_api_call = False
 
             while True:
-                current_proxy_config = None
-                httpx_proxies = None
-                # Индивидуальная настройка прокси
-                use_global_proxy = True
-                try:
-                    with open(self.settings_file_path, 'r') as f:
-                        settings_data = json.load(f)
-                        use_global_proxy = settings_data.get("module_proxy_usage", {}).get(self.service_name, True)
-                except Exception as e:
-                    logger.error(f"Error reading module_proxy_usage for {self.service_name}: {e} (defaulting to True)")
-                if use_global_proxy and self.proxy_manager.active:
-                    current_proxy_config = self.proxy_manager.get_proxy()
-                    httpx_proxies = self._get_httpx_proxies(current_proxy_config)
+                current_proxy_config, httpx_proxies, proxy_url_for_log = self._resolve_proxy_context()
 
                 headers = {
                     "Content-Type": "application/json",
@@ -271,20 +279,10 @@ class GeminiChatModule(BaseModule):
                     "Accept": "text/event-stream"
                 }
                 url = f"{GEMINI_API_BASE_URL}{endpoint_path}"
-                proxy_url_for_log = current_proxy_config['url'] if current_proxy_config else "None (Direct)"
                 logger.debug(f"Attempting Gemini API stream: POST {url} with key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}")
 
                 try:
-                    client_args = {"timeout": 60.0}
-                    transport_stream = None
-                    if httpx_proxies:
-                        proxy_url_for_transport_stream = httpx_proxies.get("http://")
-                        if proxy_url_for_transport_stream and proxy_url_for_transport_stream.startswith(("socks5://", "socks4://")):
-                            logger.debug(f"Creating AsyncProxyTransport for SOCKS stream: {proxy_url_for_transport_stream}")
-                            transport_stream = AsyncProxyTransport.from_url(proxy_url_for_transport_stream)
-                            client_args["transport"] = transport_stream
-                        else:
-                            client_args["proxies"] = httpx_proxies
+                    client_args = build_async_client_args(httpx_proxies, timeout=60.0)
 
                     logger.debug(f"httpx version for stream: {httpx.__version__}")
                     logger.debug(f"AsyncClient arguments for stream: {client_args}")
@@ -303,13 +301,18 @@ class GeminiChatModule(BaseModule):
                                 if status_code in [401, 403]:
                                     logger.warning(f"Key error for {self.service_name} stream (key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}): HTTP {status_code} - {error_detail}. Rotating key.")
                                     previous_key_for_check = current_api_key
-                                    if not self.api_key_manager.rotate_key(self.service_name):
-                                        raise HTTPException(status_code=503, detail=key_exhausted_message + " (No keys to rotate to after auth error for stream)")
+                                    rotated, full_cycle_completed = rotate_key_and_detect_full_cycle(
+                                        self.api_key_manager,
+                                        self.service_name,
+                                        self.first_key_in_overall_cycle,
+                                        previous_key_for_check,
+                                    )
+                                    if not rotated:
+                                        raise_http_with_reason(503, key_exhausted_message, "No keys to rotate to after auth error for stream")
                                     key_was_rotated_in_current_api_call = True
-                                    current_api_key_after_rotation = self.api_key_manager.get_key(self.service_name, peek=True)
-                                    if current_api_key_after_rotation == self.first_key_in_overall_cycle and current_api_key_after_rotation != previous_key_for_check:
+                                    if full_cycle_completed:
                                         logger.warning(f"Completed a full cycle of API keys for {self.service_name} (streaming) due to HTTP {status_code}. All keys failed. Raising final exception.")
-                                        raise HTTPException(status_code=status_code, detail=f"{key_exhausted_message} (Full key cycle for HTTP {status_code} in stream)")
+                                        raise HTTPException(status_code=status_code, detail=with_reason(key_exhausted_message, f"Full key cycle for HTTP {status_code} in stream"))
                                     break
 
                                 elif 400 <= status_code < 500 and status_code != 429:
@@ -318,22 +321,29 @@ class GeminiChatModule(BaseModule):
 
                                 else:
                                     logger.warning(f"HTTPStatusError (status {status_code}) for {self.service_name} stream (key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}): {error_detail}. Attempting proxy rotation.")
-                                    if self.proxy_manager.active and self.proxy_manager.rotate_proxy():
+                                    rotation_outcome, full_cycle_completed = advance_proxy_or_key(
+                                        self.proxy_manager,
+                                        self.api_key_manager,
+                                        self.service_name,
+                                        self.first_key_in_overall_cycle,
+                                        current_api_key,
+                                    )
+                                    if rotation_outcome == "proxy_rotated":
                                         logger.info(f"Successfully rotated to next proxy for key ...{current_api_key[-4:]} (stream). Retrying.")
                                         continue
-                                    else:
-                                        logger.warning(f"Failed to rotate proxy or proxies exhausted for key ...{current_api_key[-4:]} (stream). Attempting key rotation.")
-                                        previous_key_for_check = current_api_key
-                                        if not self.api_key_manager.rotate_key(self.service_name):
-                                            final_err_msg = f"{key_exhausted_message} (HTTPStatusError {status_code} on all proxies/keys for stream, no keys to rotate to)"
-                                            logger.error(final_err_msg)
-                                            raise HTTPException(status_code=status_code if status_code in [429, 502, 503, 504] else 500, detail=final_err_msg)
-                                        key_was_rotated_in_current_api_call = True
-                                        current_api_key_after_rotation = self.api_key_manager.get_key(self.service_name, peek=True)
-                                        if current_api_key_after_rotation == self.first_key_in_overall_cycle and current_api_key_after_rotation != previous_key_for_check:
-                                            logger.warning(f"Completed a full cycle of API keys for {self.service_name} (streaming) due to HTTPStatusError {status_code}. All keys failed. Raising final exception.")
-                                            raise HTTPException(status_code=status_code if status_code in [429, 502, 503, 504] else 500, detail=f"{key_exhausted_message} (Full key cycle for HTTPStatusError {status_code} in stream)")
-                                        break
+                                    logger.warning(f"Failed to rotate proxy or proxies exhausted for key ...{current_api_key[-4:]} (stream). Attempting key rotation.")
+                                    if rotation_outcome == "key_exhausted":
+                                        raise_http_with_reason(
+                                            status_code if status_code in [429, 502, 503, 504] else 500,
+                                            key_exhausted_message,
+                                            f"HTTPStatusError {status_code} on all proxies/keys for stream, no keys to rotate to",
+                                            logger,
+                                        )
+                                    key_was_rotated_in_current_api_call = True
+                                    if full_cycle_completed:
+                                        logger.warning(f"Completed a full cycle of API keys for {self.service_name} (streaming) due to HTTPStatusError {status_code}. All keys failed. Raising final exception.")
+                                        raise HTTPException(status_code=status_code if status_code in [429, 502, 503, 504] else 500, detail=with_reason(key_exhausted_message, f"Full key cycle for HTTPStatusError {status_code} in stream"))
+                                    break
 
                             logger.info(f"Gemini API stream successful (status 200) for key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}. Reading stream.")
 
@@ -427,20 +437,7 @@ class GeminiChatModule(BaseModule):
 
                             logger.info(f"Gemini API stream processing finished for {self.service_name} with key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}. Data chunks yielded: {yielded_data_chunk_count}.")
 
-                            force_rotation_enabled_stream = False
-                            try:
-                                with open(self.settings_file_path, 'r') as f:
-                                    settings_data_stream = json.load(f)
-                                    force_rotation_enabled_stream = settings_data_stream.get("proxy_settings", {}).get("force_proxy_rotation_after_request", False)
-                            except Exception as e_settings_stream:
-                                logger.error(f"Could not read force_proxy_rotation_after_request from {self.settings_file_path} for Gemini (streaming): {e_settings_stream}. Defaulting to False.")
-
-                            if force_rotation_enabled_stream and \
-                               self.proxy_manager.current_rotation_mode != "failover_cycle" and \
-                               not self.proxy_manager.select_random_proxy_each_request:
-                               if self.proxy_manager.active and self.proxy_manager.proxies:
-                                   logger.debug("Force rotating proxy after successful stream as per settings (Gemini streaming).")
-                                   self.proxy_manager.rotate_proxy()
+                            self._maybe_force_rotate_proxy_after_success("Gemini streaming")
                             return
 
                 except (httpx.RequestError, Exception) as e:
@@ -452,47 +449,63 @@ class GeminiChatModule(BaseModule):
                     )
                     logger.warning(log_message)
 
-                    if self.proxy_manager.active and self.proxy_manager.rotate_proxy():
+                    status_code_for_exc = map_httpx_exception_to_status(e, proxy_hint=is_proxy_related_error)
+                    rotation_outcome, full_cycle_completed = advance_proxy_or_key(
+                        self.proxy_manager,
+                        self.api_key_manager,
+                        self.service_name,
+                        self.first_key_in_overall_cycle,
+                        current_api_key,
+                    )
+                    if rotation_outcome == "proxy_rotated":
                         logger.info(f"Successfully rotated to next proxy for key ...{current_api_key[-4:]} after {error_type_name} (stream). Retrying.")
                         continue
-                    else:
-                        logger.warning(f"Failed to rotate proxy or proxies exhausted for key ...{current_api_key[-4:]} after {error_type_name} (stream). Attempting key rotation.")
-                        previous_key_for_check = current_api_key
-                        if not self.api_key_manager.rotate_key(self.service_name):
-                            final_err_msg = f"{key_exhausted_message} ({error_type_name} on all proxies/keys for stream, no keys to rotate to)"
-                            logger.error(final_err_msg)
-                            status_code_for_exc = 504 if isinstance(e, httpx.TimeoutException) else 502 if isinstance(e, (httpx.NetworkError, httpx.ConnectError, httpx.ProxyError)) else 500
-                            if is_proxy_related_error and status_code_for_exc == 500: status_code_for_exc = 503
-                            raise HTTPException(status_code=status_code_for_exc, detail=final_err_msg)
-                        key_was_rotated_in_current_api_call = True
-                        current_api_key_after_rotation = self.api_key_manager.get_key(self.service_name, peek=True)
-                        if current_api_key_after_rotation == self.first_key_in_overall_cycle and current_api_key_after_rotation != previous_key_for_check:
-                            logger.warning(f"Completed a full cycle of API keys for {self.service_name} (streaming) due to {error_type_name}. All keys failed. Raising final exception.")
-                            raise HTTPException(status_code=status_code_for_exc, detail=f"{key_exhausted_message} (Full key cycle for {error_type_name} in stream)")
-                        break
+                    logger.warning(f"Failed to rotate proxy or proxies exhausted for key ...{current_api_key[-4:]} after {error_type_name} (stream). Attempting key rotation.")
+                    if rotation_outcome == "key_exhausted":
+                        raise_http_with_reason(
+                            status_code_for_exc,
+                            key_exhausted_message,
+                            f"{error_type_name} on all proxies/keys for stream, no keys to rotate to",
+                            logger,
+                        )
+                    key_was_rotated_in_current_api_call = True
+                    if full_cycle_completed:
+                        logger.warning(f"Completed a full cycle of API keys for {self.service_name} (streaming) due to {error_type_name}. All keys failed. Raising final exception.")
+                        raise HTTPException(status_code=status_code_for_exc, detail=with_reason(key_exhausted_message, f"Full key cycle for {error_type_name} in stream"))
+                    break
 
                 if not self.proxy_manager.active:
                     logger.debug(f"Direct call failed for key ...{current_api_key[-4:]} (proxies inactive, stream). Rotating key.")
                     previous_key_for_check = current_api_key
-                    if not self.api_key_manager.rotate_key(self.service_name):
-                        raise HTTPException(status_code=503, detail=key_exhausted_message + " (Direct call failed for stream, no more keys)")
+                    rotated, full_cycle_completed = rotate_key_and_detect_full_cycle(
+                        self.api_key_manager,
+                        self.service_name,
+                        self.first_key_in_overall_cycle,
+                        previous_key_for_check,
+                    )
+                    if not rotated:
+                        raise_http_with_reason(503, key_exhausted_message, "Direct call failed for stream, no more keys")
                     key_was_rotated_in_current_api_call = True
-                    current_api_key_after_rotation = self.api_key_manager.get_key(self.service_name, peek=True)
-                    if current_api_key_after_rotation == self.first_key_in_overall_cycle and current_api_key_after_rotation != previous_key_for_check:
+                    if full_cycle_completed:
                         logger.warning(f"Completed a full cycle of API keys for {self.service_name} (streaming, direct call failed). All keys failed.")
-                        raise HTTPException(status_code=503, detail=f"{key_exhausted_message} (Full key cycle, direct calls failed for stream)")
+                        raise HTTPException(status_code=503, detail=with_reason(key_exhausted_message, "Full key cycle, direct calls failed for stream"))
                     break
 
                 if current_proxy_config is None and self.proxy_manager.proxies:
                      logger.debug(f"All proxies tried for key ...{current_api_key[-4:]} (streaming). Rotating key.")
                      previous_key_for_check = current_api_key
-                     if not self.api_key_manager.rotate_key(self.service_name):
-                         raise HTTPException(status_code=503, detail=key_exhausted_message + " (All proxies tried for stream, no more keys)")
+                     rotated, full_cycle_completed = rotate_key_and_detect_full_cycle(
+                         self.api_key_manager,
+                         self.service_name,
+                         self.first_key_in_overall_cycle,
+                         previous_key_for_check,
+                     )
+                     if not rotated:
+                         raise_http_with_reason(503, key_exhausted_message, "All proxies tried for stream, no more keys")
                      key_was_rotated_in_current_api_call = True
-                     current_api_key_after_rotation = self.api_key_manager.get_key(self.service_name, peek=True)
-                     if current_api_key_after_rotation == self.first_key_in_overall_cycle and current_api_key_after_rotation != previous_key_for_check:
+                     if full_cycle_completed:
                         logger.warning(f"Completed a full cycle of API keys for {self.service_name} (streaming, all proxies tried). All keys failed.")
-                        raise HTTPException(status_code=503, detail=f"{key_exhausted_message} (Full key cycle, all proxies tried for stream)")
+                        raise HTTPException(status_code=503, detail=with_reason(key_exhausted_message, "Full key cycle, all proxies tried for stream"))
                      break
 
     async def chat_completion(self, request: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:

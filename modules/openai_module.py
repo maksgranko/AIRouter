@@ -11,6 +11,9 @@ import json
 
 from handlers.misc.one_messager import reformat_messages
 from admin_router import get_reformat_settings
+from utils.config_store import read_json
+from .key_cycle_utils import init_first_cycle_key, rotate_key_and_detect_full_cycle
+from .retry_utils import map_openai_exception_to_status, advance_proxy_or_key, with_reason, raise_http_with_reason
 
 logger = logging.getLogger(__name__)
 
@@ -33,18 +36,43 @@ class OpenAIChatModule(BaseModule):
             return proxy_config['url']
         return None
 
+    def _load_settings_snapshot(self) -> Dict[str, Any]:
+        settings = read_json(self.settings_file_path, {})
+        return settings if isinstance(settings, dict) else {}
+
+    def _use_global_proxy_for_module(self) -> bool:
+        settings = self._load_settings_snapshot()
+        return settings.get("module_proxy_usage", {}).get(self.service_name, True)
+
+    def _is_force_proxy_rotation_enabled(self) -> bool:
+        settings = self._load_settings_snapshot()
+        return settings.get("proxy_settings", {}).get("force_proxy_rotation_after_request", False)
+
+    def _maybe_force_rotate_proxy_after_success(self):
+        if not self._is_force_proxy_rotation_enabled():
+            return
+        if self.proxy_manager.current_rotation_mode == "failover_cycle":
+            return
+        if self.proxy_manager.select_random_proxy_each_request:
+            return
+        if self.proxy_manager.active and self.proxy_manager.proxies:
+            logger.debug("Force rotating proxy after successful call as per settings (OpenAI).")
+            self.proxy_manager.rotate_proxy()
+
     async def _execute_with_rotation(self, sync_api_call_func: Callable[[], Dict[str, Any]]) -> Dict[str, Any]:
         key_exhausted_message = f"All API keys for {self.service_name} are exhausted or failed."
-        if self.key_loop_initial_run:
-            self.first_key_in_overall_cycle = self.api_key_manager.get_key(self.service_name, peek=True)
-            self.key_loop_initial_run = False
+        self.first_key_in_overall_cycle, self.key_loop_initial_run = init_first_cycle_key(
+            self.api_key_manager,
+            self.service_name,
+            self.first_key_in_overall_cycle,
+            self.key_loop_initial_run,
+        )
 
         key_was_rotated_in_current_api_call = False
         while True:
             current_api_key = self.api_key_manager.get_key(self.service_name)
             if not current_api_key:
-                logger.error(key_exhausted_message + " (No keys available at start of key loop)")
-                raise HTTPException(status_code=503, detail=key_exhausted_message + " (No keys available at start of key loop)")
+                raise_http_with_reason(503, key_exhausted_message, "No keys available at start of key loop", logger)
 
             if self.last_api_key_used_for_proxy_context != current_api_key or key_was_rotated_in_current_api_call:
                 logger.debug(f"API key changed or rotated for {self.service_name}. Old: {self.last_api_key_used_for_proxy_context}, New: {current_api_key}. Resetting proxies.")
@@ -58,13 +86,7 @@ class OpenAIChatModule(BaseModule):
             while True:
                 current_proxy_config = None
                 # INDIVIDUAL module proxy logic
-                use_global_proxy = True
-                try:
-                    with open(self.settings_file_path, 'r') as f:
-                        settings_data = json.load(f)
-                        use_global_proxy = settings_data.get('module_proxy_usage', {}).get(self.service_name, True)
-                except Exception as e:
-                    logger.error(f"Error reading module_proxy_usage for {self.service_name}: {e} (defaulting to True)")
+                use_global_proxy = self._use_global_proxy_for_module()
 
                 if use_global_proxy and self.proxy_manager.active:
                     current_proxy_config = self.proxy_manager.get_proxy()
@@ -78,102 +100,112 @@ class OpenAIChatModule(BaseModule):
                     try:
                         result = await asyncio.to_thread(sync_api_call_func)
                         logger.info(f"API call successful for {self.service_name} with key ...{current_api_key[-4:]} and proxy {proxy_url_for_log}.")
-                        force_rotation_enabled = False
-                        try:
-                            with open(self.settings_file_path, 'r') as f:
-                                settings_data = json.load(f)
-                                force_rotation_enabled = settings_data.get("proxy_settings", {}).get("force_proxy_rotation_after_request", False)
-                        except Exception as e_settings:
-                            logger.error(f"Could not read force_proxy_rotation_after_request from {self.settings_file_path}: {e_settings}. Defaulting to False.")
-                        if force_rotation_enabled and \
-                           self.proxy_manager.current_rotation_mode != "failover_cycle" and \
-                           not self.proxy_manager.select_random_proxy_each_request:
-                            if self.proxy_manager.active and self.proxy_manager.proxies:
-                                logger.debug("Force rotating proxy after successful call as per settings (OpenAI).")
-                                self.proxy_manager.rotate_proxy()
+                        self._maybe_force_rotate_proxy_after_success()
                         return result
                     except (openai.error.AuthenticationError, openai.error.PermissionError) as e:
                         logger.warning(f"Key error for {self.service_name} (key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}): {type(e).__name__}. Rotating key.")
                         previous_key_for_check = current_api_key
-                        if not self.api_key_manager.rotate_key(self.service_name):
-                            logger.error(key_exhausted_message + " (No keys to rotate to after auth error)")
-                            raise HTTPException(status_code=503, detail=key_exhausted_message + " (No keys to rotate to after auth error)")
+                        rotated, full_cycle_completed = rotate_key_and_detect_full_cycle(
+                            self.api_key_manager,
+                            self.service_name,
+                            self.first_key_in_overall_cycle,
+                            previous_key_for_check,
+                        )
+                        if not rotated:
+                            raise_http_with_reason(503, key_exhausted_message, "No keys to rotate to after auth error", logger)
                         key_was_rotated_in_current_api_call = True
-                        current_api_key_after_rotation = self.api_key_manager.get_key(self.service_name, peek=True)
-                        if current_api_key_after_rotation == self.first_key_in_overall_cycle and current_api_key_after_rotation != previous_key_for_check:
+                        if full_cycle_completed:
                             logger.warning(f"Completed a full cycle of API keys for {self.service_name} due to {type(e).__name__}. All keys failed. Raising final exception.")
-                            raise HTTPException(status_code=503, detail=f"{key_exhausted_message} (Full key cycle for {type(e).__name__})")
+                            raise HTTPException(status_code=503, detail=with_reason(key_exhausted_message, f"Full key cycle for {type(e).__name__}"))
                         break
                     except openai.error.InvalidRequestError as e:
                         logger.error(f"Invalid request to OpenAI for {self.service_name}: {e}")
                         raise HTTPException(status_code=400, detail=f"Invalid request to OpenAI: {str(e)}")
                     except openai.error.OpenAIError as e:
                         logger.warning(f"OpenAI API Error for {self.service_name} (key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}): {type(e).__name__} - {str(e)}. Attempting proxy rotation.")
-                        if self.proxy_manager.active and self.proxy_manager.rotate_proxy():
+                        status_code_val = map_openai_exception_to_status(e, openai)
+                        rotation_outcome, full_cycle_completed = advance_proxy_or_key(
+                            self.proxy_manager,
+                            self.api_key_manager,
+                            self.service_name,
+                            self.first_key_in_overall_cycle,
+                            current_api_key,
+                        )
+                        if rotation_outcome == "proxy_rotated":
                             logger.info(f"Successfully rotated to next proxy for key ...{current_api_key[-4:]}. Retrying.")
                             continue
-                        else:
-                            logger.warning(f"Failed to rotate proxy or proxies exhausted for key ...{current_api_key[-4:]}. Attempting key rotation.")
-                            previous_key_for_check = current_api_key
-                            if not self.api_key_manager.rotate_key(self.service_name):
-                                final_error_message = f"{key_exhausted_message} (Error type: {type(e).__name__} on all proxies/keys, no keys to rotate to)"
-                                logger.error(final_error_message)
-                                status_code_val = 500
-                                if isinstance(e, openai.error.RateLimitError): status_code_val = 429
-                                elif isinstance(e, openai.error.APIConnectionError): status_code_val = 502
-                                elif isinstance(e, openai.error.Timeout): status_code_val = 504
-                                elif isinstance(e, openai.error.ServiceUnavailableError): status_code_val = 503
-                                raise HTTPException(status_code=status_code_val, detail=final_error_message)
-                            key_was_rotated_in_current_api_call = True
-                            current_api_key_after_rotation = self.api_key_manager.get_key(self.service_name, peek=True)
-                            if current_api_key_after_rotation == self.first_key_in_overall_cycle and current_api_key_after_rotation != previous_key_for_check:
-                                logger.warning(f"Completed a full cycle of API keys for {self.service_name} due to {type(e).__name__}. All keys failed. Raising final exception.")
-                                final_error_message = f"{key_exhausted_message} (Full key cycle for {type(e).__name__})"
-                                raise HTTPException(status_code=status_code_val, detail=final_error_message)
-                            break
+                        logger.warning(f"Failed to rotate proxy or proxies exhausted for key ...{current_api_key[-4:]}. Attempting key rotation.")
+                        if rotation_outcome == "key_exhausted":
+                            raise_http_with_reason(
+                                status_code_val,
+                                key_exhausted_message,
+                                f"Error type: {type(e).__name__} on all proxies/keys, no keys to rotate to",
+                                logger,
+                            )
+                        key_was_rotated_in_current_api_call = True
+                        if full_cycle_completed:
+                            logger.warning(f"Completed a full cycle of API keys for {self.service_name} due to {type(e).__name__}. All keys failed. Raising final exception.")
+                            final_error_message = with_reason(key_exhausted_message, f"Full key cycle for {type(e).__name__}")
+                            raise HTTPException(status_code=status_code_val, detail=final_error_message)
+                        break
                     except Exception as e:
                         logger.error(f"Unexpected non-OpenAI error during API call for {self.service_name} (key ...{current_api_key[-4:]}, proxy {proxy_url_for_log}): {type(e).__name__} - {str(e)}. Attempting proxy rotation first.")
-                        if self.proxy_manager.active and self.proxy_manager.rotate_proxy():
+                        rotation_outcome, full_cycle_completed = advance_proxy_or_key(
+                            self.proxy_manager,
+                            self.api_key_manager,
+                            self.service_name,
+                            self.first_key_in_overall_cycle,
+                            current_api_key,
+                        )
+                        if rotation_outcome == "proxy_rotated":
                             logger.info(f"Successfully rotated to next proxy for key ...{current_api_key[-4:]} after unexpected error. Retrying.")
                             continue
-                        else:
-                            logger.warning(f"Failed to rotate proxy or proxies exhausted for key ...{current_api_key[-4:]} after unexpected error. Attempting key rotation.")
-                            previous_key_for_check = current_api_key
-                            if not self.api_key_manager.rotate_key(self.service_name):
-                                final_error_message = f"{key_exhausted_message} (Unexpected Error type: {type(e).__name__} on all proxies/keys, no keys to rotate to)"
-                                logger.error(final_error_message)
-                                raise HTTPException(status_code=500, detail=final_error_message)
-                            key_was_rotated_in_current_api_call = True
-                            current_api_key_after_rotation = self.api_key_manager.get_key(self.service_name, peek=True)
-                            if current_api_key_after_rotation == self.first_key_in_overall_cycle and current_api_key_after_rotation != previous_key_for_check:
-                                logger.warning(f"Completed a full cycle of API keys for {self.service_name} due to unexpected {type(e).__name__}. All keys failed. Raising final exception.")
-                                raise HTTPException(status_code=500, detail=f"{key_exhausted_message} (Full key cycle for unexpected {type(e).__name__})")
-                            break
+                        logger.warning(f"Failed to rotate proxy or proxies exhausted for key ...{current_api_key[-4:]} after unexpected error. Attempting key rotation.")
+                        if rotation_outcome == "key_exhausted":
+                            raise_http_with_reason(
+                                500,
+                                key_exhausted_message,
+                                f"Unexpected Error type: {type(e).__name__} on all proxies/keys, no keys to rotate to",
+                                logger,
+                            )
+                        key_was_rotated_in_current_api_call = True
+                        if full_cycle_completed:
+                            logger.warning(f"Completed a full cycle of API keys for {self.service_name} due to unexpected {type(e).__name__}. All keys failed. Raising final exception.")
+                            raise HTTPException(status_code=500, detail=with_reason(key_exhausted_message, f"Full key cycle for unexpected {type(e).__name__}"))
+                        break
 
                 if not self.proxy_manager.active:
                     logger.debug(f"Proxies disabled or not loaded. Attempted direct call for key ...{current_api_key[-4:]}. Rotating key if call failed and not already rotated.")
                     previous_key_for_check = current_api_key
-                    if not self.api_key_manager.rotate_key(self.service_name):
-                        logger.error(key_exhausted_message + " (Direct call failed, no keys to rotate to)")
-                        raise HTTPException(status_code=503, detail=key_exhausted_message + " (Direct call failed, no keys to rotate to)")
+                    rotated, full_cycle_completed = rotate_key_and_detect_full_cycle(
+                        self.api_key_manager,
+                        self.service_name,
+                        self.first_key_in_overall_cycle,
+                        previous_key_for_check,
+                    )
+                    if not rotated:
+                        raise_http_with_reason(503, key_exhausted_message, "Direct call failed, no keys to rotate to", logger)
                     key_was_rotated_in_current_api_call = True
-                    current_api_key_after_rotation = self.api_key_manager.get_key(self.service_name, peek=True)
-                    if current_api_key_after_rotation == self.first_key_in_overall_cycle and current_api_key_after_rotation != previous_key_for_check:
+                    if full_cycle_completed:
                         logger.warning(f"Completed a full cycle of API keys for {self.service_name} (direct call failed for last key). All keys failed.")
-                        raise HTTPException(status_code=503, detail=f"{key_exhausted_message} (Full key cycle, direct calls failed)")
+                        raise HTTPException(status_code=503, detail=with_reason(key_exhausted_message, "Full key cycle, direct calls failed"))
                     break
 
                 if current_proxy_config is None and self.proxy_manager.proxies:
                      logger.debug(f"All proxies tried for key ...{current_api_key[-4:]}. Rotating key.")
                      previous_key_for_check = current_api_key
-                     if not self.api_key_manager.rotate_key(self.service_name):
-                         logger.error(key_exhausted_message + " (All proxies tried, no keys to rotate to)")
-                         raise HTTPException(status_code=503, detail=key_exhausted_message + " (All proxies tried, no keys to rotate to)")
+                     rotated, full_cycle_completed = rotate_key_and_detect_full_cycle(
+                         self.api_key_manager,
+                         self.service_name,
+                         self.first_key_in_overall_cycle,
+                         previous_key_for_check,
+                     )
+                     if not rotated:
+                         raise_http_with_reason(503, key_exhausted_message, "All proxies tried, no keys to rotate to", logger)
                      key_was_rotated_in_current_api_call = True
-                     current_api_key_after_rotation = self.api_key_manager.get_key(self.service_name, peek=True)
-                     if current_api_key_after_rotation == self.first_key_in_overall_cycle and current_api_key_after_rotation != previous_key_for_check:
-                        logger.warning(f"Completed a full cycle of API keys for {self.service_name} (all proxies tried for last key). All keys failed.")
-                        raise HTTPException(status_code=503, detail=f"{key_exhausted_message} (Full key cycle, all proxies tried)")
+                     if full_cycle_completed:
+                         logger.warning(f"Completed a full cycle of API keys for {self.service_name} (all proxies tried for last key). All keys failed.")
+                         raise HTTPException(status_code=503, detail=with_reason(key_exhausted_message, "Full key cycle, all proxies tried"))
                      break
 
     async def chat_completion(self, request: Dict[str, Any]) -> Dict[str, Any]:
