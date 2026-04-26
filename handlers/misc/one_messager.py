@@ -35,8 +35,8 @@ def _content_to_text(content):
 
 
 def _reformat_messages_sync(input_json, smart_context_zipper=False):
-    data = input_json if isinstance(input_json, dict) else json.loads(input_json)
-    messages = data.get('messages', [])
+    data = dict(input_json) if isinstance(input_json, dict) else json.loads(input_json)
+    messages = list(data.get('messages', []))
 
     if not messages:
         raise ValueError("Список сообщений не может быть пустым")
@@ -63,16 +63,13 @@ def _reformat_messages_sync(input_json, smart_context_zipper=False):
         instructions = f"<INSTRUCTIONS>{first_message.strip()}</INSTRUCTIONS>\n\n"
         messages.pop(0)
         instructions_exists = True
-    user_length = 0
-    
+
     context_blocks = []
     if len(messages)>1:
         for msg in messages[:-1]:
             role = msg.get('role', 'user')
             content = _content_to_text(msg.get('content', '')).strip()
             context_blocks.append(f"<role:{role}>{content}</role:{role}>")
-            if role == 'user':
-                user_length += 1
         current_user_message = _content_to_text(messages[-1].get('content', '')).strip()
         
     context_section = "<YOUR_CONTEXT>\n" + "\n".join(context_blocks) + "\n</YOUR_CONTEXT>\n\n"

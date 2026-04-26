@@ -9,8 +9,11 @@ from fastapi.templating import Jinja2Templates
 from fastapi.responses import RedirectResponse, JSONResponse
 from pydantic import BaseModel, Field
 from enum import Enum
+import logging
+from utils.config_store import read_json, write_json
 
 security = HTTPBasic()
+logger = logging.getLogger(__name__)
 
 # Pydantic модели для API настроек
 class ProxySettingName(str, Enum):
@@ -58,25 +61,18 @@ class SmartContextZipperSettingPayload(BaseModel):
 
 def _load_settings() -> Dict[str, Any]:
     """Загружает все настройки из файла settings.json."""
-    if not os.path.exists(SETTINGS_FILE_PATH):
-        return {}
     try:
-        with open(SETTINGS_FILE_PATH, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except json.JSONDecodeError as e:
-        print(f"Error decoding settings.json: {e}")
-        return {}
-    except Exception as e:
-        print(f"Error loading settings.json: {e}")
+        return read_json(SETTINGS_FILE_PATH, {})
+    except Exception:
+        logger.exception("Error loading settings.json")
         return {}
 
 def _save_settings(settings_data: Dict[str, Any]):
     """Сохраняет все настройки в файл settings.json."""
     try:
-        with open(SETTINGS_FILE_PATH, 'w', encoding='utf-8') as f:
-            json.dump(settings_data, f, indent=2, ensure_ascii=False)
-    except Exception as e:
-        print(f"Error saving settings.json: {e}")
+        write_json(SETTINGS_FILE_PATH, settings_data, ensure_ascii=False)
+    except Exception:
+        logger.exception("Error saving settings.json")
 
 def get_reformat_settings() -> Dict[str, Dict[str, bool]]:
     """Получает настройки reformat_messages для всех моделей."""
@@ -181,7 +177,7 @@ async def get_dashboard_data(request: Request) -> Dict[str, Any]:
         force_proxy_rotation_after_request = settings_data.get("proxy_settings", {}).get("force_proxy_rotation_after_request", False)
         module_proxy_usage = settings_data.get("module_proxy_usage", {})
     except Exception as e:
-        print(f"Error reading settings for dashboard data: {e}") 
+        logger.exception("Error reading settings for dashboard data")
         module_proxy_usage = {}
 
     return {
@@ -282,9 +278,9 @@ async def _fetch_and_cache_all_models(request: Request, force_refresh: bool = Fa
                         all_models.append(model_data) # Добавляем измененную или оригинальную модель
                 else:
                     # Логируем, если модуль вернул что-то неожиданное
-                    print(f"Warning: Module {module_name} returned unexpected format from list_models: {models_response}")
+                    logger.warning("Module %s returned unexpected format from list_models: %s", module_name, models_response)
             except Exception as e:
-                print(f"Error fetching models from module {module_name}: {e}")
+                logger.exception("Error fetching models from module %s", module_name)
                 # Сохраняем первую возникшую ошибку, чтобы показать пользователю
                 if not current_error:
                     current_error = f"Ошибка при получении моделей от модуля {mod.get_name()}: {str(e)}"

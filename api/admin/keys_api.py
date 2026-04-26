@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.responses import JSONResponse
+import logging
 
 # Импорты из корневой папки проекта (на один уровень выше)
 from admin_router import get_current_username, \
@@ -20,6 +21,8 @@ router = APIRouter(
     dependencies=[Depends(get_current_username)]
 )
 
+logger = logging.getLogger(__name__)
+
 @router.post("/service/{service_name}", name="ui_api_add_service_key", status_code=status.HTTP_201_CREATED)
 async def ui_api_add_service_key(
     service_name: str,
@@ -37,7 +40,7 @@ async def ui_api_add_service_key(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error adding service API key via API for {service_name}: {e}")
+        logger.exception("Error adding service API key via API for %s", service_name)
         raise HTTPException(status_code=500, detail=f"Could not add API key for service '{service_name}'.")
 
 @router.patch("/service/{service_name}/key", name="ui_api_patch_service_key")
@@ -60,7 +63,7 @@ async def ui_api_patch_service_key(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error updating service API key via API for {service_name}: {e}")
+        logger.exception("Error updating service API key via API for %s", service_name)
         if service_name not in key_manager.key_files: 
             raise HTTPException(status_code=404, detail=f"Service '{service_name}' not found.")
         raise HTTPException(status_code=500, detail=f"Could not update API key for service '{service_name}'.")
@@ -82,7 +85,7 @@ async def ui_api_delete_service_key(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error deleting service API key via API for {service_name}: {e}")
+        logger.exception("Error deleting service API key via API for %s", service_name)
         raise HTTPException(status_code=500, detail=f"Could not delete API key for service '{service_name}'.")
 
 @router.post("/airouter", name="ui_api_generate_airouter_key", status_code=status.HTTP_201_CREATED)
@@ -95,7 +98,7 @@ async def ui_api_generate_airouter_key(
         new_key = airouter_key_manager.generate_and_add_key()
         return JSONResponse(content={"status": "success", "message": "New AIRouter API key generated and added.", "new_key": new_key})
     except Exception as e:
-        print(f"Error generating AIRouter API key via API: {e}")
+        logger.exception("Error generating AIRouter API key via API")
         raise HTTPException(status_code=500, detail="Could not generate AIRouter API key.")
 
 @router.patch("/airouter/key", name="ui_api_patch_airouter_key")
@@ -119,8 +122,10 @@ async def ui_api_patch_airouter_key(
         except Exception as update_err:
             raise HTTPException(status_code=500, detail=f"Failed to update AIRouter API key: {update_err}")
         return JSONResponse(content={"status": "success", "message": "AIRouter API ключ обновлён."})
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"Error updating AIRouter API key via API: {e}")
+        logger.exception("Error updating AIRouter API key via API")
         raise HTTPException(status_code=500, detail="Could not update AIRouter API key.")
 
 @router.delete("/airouter", name="ui_api_delete_airouter_key")
@@ -137,5 +142,5 @@ async def ui_api_delete_airouter_key(
     except HTTPException:
         raise
     except Exception as e:
-        print(f"Error deleting AIRouter API key via API: {e}")
+        logger.exception("Error deleting AIRouter API key via API")
         raise HTTPException(status_code=500, detail=f"Could not delete AIRouter API key '{payload.api_key}'.")

@@ -80,6 +80,17 @@ def _require_module_method(module: Any, method_name: str):
     return method
 
 
+async def _call_optional_module_method(module: Any, method_name: str, *args, **kwargs):
+    method = _require_module_method(module, method_name)
+    try:
+        return await method(*args, **kwargs)
+    except NotImplementedError:
+        raise HTTPException(
+            status_code=501,
+            detail=f"Endpoint is not supported by module '{module.get_name()}'.",
+        )
+
+
 async def sse_event_formatter(generator: AsyncGenerator[Dict[str, Any], None]) -> AsyncGenerator[str, None]:
     """
     Форматирует словари из генератора в Server-Sent Events (SSE) строки.
@@ -234,7 +245,7 @@ async def edit_image(
 ):
     model_name_to_use = model if model else "openai"
     module = get_module(request, {"model": model_name_to_use})
-    method = _require_module_method(module, "generate_image_edit")
+    method_name = "generate_image_edit"
 
     image_bytes = await image.read()
     mask_bytes = await mask.read() if mask else None
@@ -250,7 +261,9 @@ async def edit_image(
     if user:
         request_params["user"] = user
 
-    return await method(
+    return await _call_optional_module_method(
+        module,
+        method_name,
         request_params,
         image_bytes,
         image.filename,
@@ -271,7 +284,7 @@ async def image_variations(
 ):
     model_name_to_use = model if model else "openai"
     module = get_module(request, {"model": model_name_to_use})
-    method = _require_module_method(module, "generate_image_variation")
+    method_name = "generate_image_variation"
 
     image_bytes = await image.read()
     request_params = {"model": model_name_to_use}
@@ -284,7 +297,7 @@ async def image_variations(
     if user:
         request_params["user"] = user
 
-    return await method(request_params, image_bytes, image.filename)
+    return await _call_optional_module_method(module, method_name, request_params, image_bytes, image.filename)
 
 @router.post("/v1/audio/transcriptions")
 async def audio_transcription(
@@ -346,13 +359,11 @@ async def audio_translation(
 async def audio_speech(request: Request):
     body = await request.json()
     module = get_module(request, body)
-    method = _require_module_method(module, "audio_speech")
-    return await method(body)
+    return await _call_optional_module_method(module, "audio_speech", body)
 
 
 @router.post("/v1/responses")
 async def responses(request: Request):
     body = await request.json()
     module = get_module(request, body)
-    method = _require_module_method(module, "responses")
-    return await method(body)
+    return await _call_optional_module_method(module, "responses", body)

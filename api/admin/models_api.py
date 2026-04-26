@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Body
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+import logging
 
 # Импортируем модуль admin_router целиком, чтобы получить доступ к его глобальным переменным
 import admin_router 
@@ -17,6 +18,8 @@ router = APIRouter(
     tags=["models_admin_ui_api"], 
     dependencies=[Depends(get_current_username)]
 )
+
+logger = logging.getLogger(__name__)
 
 @router.post("/refresh", name="ui_api_refresh_models", status_code=status.HTTP_200_OK)
 async def ui_api_refresh_models(
@@ -36,7 +39,7 @@ async def ui_api_refresh_models(
         }
         return JSONResponse(content=response_content)
     except Exception as e:
-        print(f"Error refreshing models cache via API: {e}")
+        logger.exception("Error refreshing models cache via API")
         raise HTTPException(status_code=500, detail="Could not refresh models cache.")
 
 @router.post("/set_reformat_status", name="ui_api_set_reformat_status", status_code=status.HTTP_200_OK)
@@ -51,7 +54,7 @@ async def ui_api_set_reformat_status(
             "message": f"Reformat setting for model '{payload.model_id}' ({payload.module_name}) updated to {payload.is_reformat_enabled}."
         })
     except Exception as e:
-        print(f"Error setting reformat status for model {payload.model_id}: {e}")
+        logger.exception("Error setting reformat status for model %s", payload.model_id)
         raise HTTPException(status_code=500, detail=f"Could not update reformat setting: {e}")
 
 @router.post("/set_smart_context_zipper_status", name="ui_api_set_smart_context_zipper_status", status_code=status.HTTP_200_OK)
@@ -69,7 +72,7 @@ async def ui_api_set_smart_context_zipper_status(
                        f" ({payload.module_name}) updated to {payload.is_smart_context_zipper_enabled}."
         })
     except Exception as e:
-        print(f"Error setting SmartContextZipper status for model {payload.model_id}: {e}")
+        logger.exception("Error setting SmartContextZipper status for model %s", payload.model_id)
         raise HTTPException(status_code=500, detail=f"Could not update SmartContextZipper setting:{e}")
 
 @router.get("/get_reformat_settings", name="ui_api_get_reformat_settings", status_code=status.HTTP_200_OK)
@@ -83,7 +86,7 @@ async def ui_api_get_reformat_settings(
             "settings": settings
         })
     except Exception as e:
-        print(f"Error getting reformat settings: {e}")
+        logger.exception("Error getting reformat settings")
         raise HTTPException(status_code=500, detail=f"Could not retrieve reformat settings: {e}")
 
 @router.get("/get_smart_context_zipper_settings", name="ui_api_get_smart_context_zipper_settings", status_code=status.HTTP_200_OK)
@@ -97,5 +100,5 @@ async def ui_api_get_smart_context_zipper_settings(
             "settings": settings
         })
     except Exception as e:
-        print(f"Error getting SmartContextZipper settings: {e}")
+        logger.exception("Error getting SmartContextZipper settings")
         raise HTTPException(status_code=500, detail=f"Could not retrieve SmartContextZipper settings: {e}")

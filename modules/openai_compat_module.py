@@ -13,6 +13,13 @@ from handlers.misc.one_messager import reformat_messages
 from admin_router import get_reformat_settings, get_smart_context_zipper_settings
 from handlers.misc.libs.tokenizer.main import get_token_count
 from handlers.misc.s200_handler import check_string_for_errors,FilteredStreamContentException
+from .oaic_routing import (
+    parse_instance_and_model_id as parse_oaic_instance_and_model_id,
+    get_instance_config as get_oaic_instance_config,
+    parse_target_reference as parse_oaic_target_reference,
+    resolve_model_targets as resolve_oaic_model_targets,
+    build_failsafe_chain as build_oaic_failsafe_chain,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,26 +29,7 @@ class OpenAICompatModule(BaseModule):
     @staticmethod
     def parse_instance_and_model_id(model_identifier: str):
         """Парсер для id вида OAIC/{instance}/{provider_path} или openai_{instance}/{provider_path}."""
-        if not isinstance(model_identifier, str):
-            return None, None
-        if model_identifier.startswith("OAIC/"):
-            parts = model_identifier.split("/", 2)
-            if len(parts) < 3:
-                return None, None
-            instance = parts[1]
-            provider_model_path = parts[2]
-            return instance, provider_model_path
-        if model_identifier.startswith("openai_") and "/" in model_identifier:
-            instance_and_rest = model_identifier[len("openai_"):]
-            parts = instance_and_rest.split("/", 1)
-            if len(parts) < 2:
-                return None, None
-            instance = parts[0]
-            provider_model_path = parts[1]
-            if not instance or not provider_model_path:
-                return None, None
-            return instance, provider_model_path
-        return None, None
+        return parse_oaic_instance_and_model_id(model_identifier)
 
     def __init__(self, 
                  instances_config: List[Dict[str, Any]], 
@@ -80,79 +68,18 @@ class OpenAICompatModule(BaseModule):
         return None
 
     def _get_instance_config(self, instance_name: str) -> Optional[Dict[str, Any]]:
-        for conf in self.instances_config:
-            if conf["name"] == instance_name and conf.get("enabled", True):
-                return conf
-        return None
+        return get_oaic_instance_config(self.instances_config, instance_name, include_disabled=False)
 
     def _get_instance_config_any_state(self, instance_name: str) -> Optional[Dict[str, Any]]:
-        for conf in self.instances_config:
-            if conf.get("name") == instance_name:
-                return conf
-        return None
+        return get_oaic_instance_config(self.instances_config, instance_name, include_disabled=True)
 
     @staticmethod
     def _parse_target_reference(reference: Any, default_instance: str):
-        if not isinstance(reference, str) or not reference.strip():
-            return None, None
-        normalized = reference.strip()
-        parsed_instance, parsed_model = OpenAICompatModule.parse_instance_and_model_id(normalized)
-        if parsed_instance and parsed_model:
-            return parsed_instance, parsed_model
-        if "/" in normalized:
-            parts = normalized.split("/", 1)
-            if len(parts) == 2 and parts[0] and parts[1]:
-                return parts[0], parts[1]
-            return None, None
-        return default_instance, normalized
+        return parse_oaic_target_reference(reference, default_instance)
 
     def _resolve_instance_and_model(self, instance_name: str, model_name: str):
-        current_instance = instance_name
-        current_model = model_name
-        visited = {(current_instance, current_model)}
-        max_hops = 12
-
-        for _ in range(max_hops):
-            instance_conf = self._get_instance_config_any_state(current_instance)
-            if not instance_conf:
-                raise HTTPException(status_code=400, detail=f"Instance '{current_instance}' not found.")
-
-            redirects = instance_conf.get("model_redirects")
-            aliases = instance_conf.get("model_aliases")
-            if not isinstance(redirects, dict):
-                redirects = {}
-            if not isinstance(aliases, dict):
-                aliases = {}
-
-            target_ref = None
-            if current_model in redirects:
-                target_ref = redirects[current_model]
-            elif current_model in aliases:
-                target_ref = aliases[current_model]
-
-            if target_ref is None:
-                return current_instance, current_model
-
-            next_instance, next_model = self._parse_target_reference(target_ref, current_instance)
-            if not next_instance or not next_model:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid model mapping for '{current_instance}/{current_model}'.",
-                )
-
-            pair = (next_instance, next_model)
-            if pair in visited:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Model alias/redirect cycle detected near '{next_instance}/{next_model}'.",
-                )
-            visited.add(pair)
-            current_instance, current_model = next_instance, next_model
-
-        raise HTTPException(
-            status_code=400,
-            detail=f"Too many alias/redirect hops while resolving model '{instance_name}/{model_name}'.",
-        )
+        targets = self._resolve_model_targets(instance_name, model_name)
+        return targets[0]
 
     def _resolve_model_targets(
         self,
@@ -162,100 +89,17 @@ class OpenAICompatModule(BaseModule):
         depth: int = 0,
         max_depth: int = 16,
     ) -> List[tuple]:
-        if path is None:
-            path = []
-        node = (instance_name, model_name)
-        if depth > max_depth:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Too many alias/redirect hops while resolving model '{instance_name}/{model_name}'.",
-            )
-        if node in path:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Model alias/redirect cycle detected near '{instance_name}/{model_name}'.",
-            )
-
-        instance_conf = self._get_instance_config_any_state(instance_name)
-        if not instance_conf:
-            raise HTTPException(status_code=400, detail=f"Instance '{instance_name}' not found.")
-
-        redirects = instance_conf.get("model_redirects")
-        aliases = instance_conf.get("model_aliases")
-        if not isinstance(redirects, dict):
-            redirects = {}
-        if not isinstance(aliases, dict):
-            aliases = {}
-
-        mapping_value = None
-        if model_name in redirects:
-            mapping_value = redirects[model_name]
-        elif model_name in aliases:
-            mapping_value = aliases[model_name]
-
-        if mapping_value is None:
-            return [node]
-
-        if isinstance(mapping_value, str):
-            next_instance, next_model = self._parse_target_reference(mapping_value, instance_name)
-            if not next_instance or not next_model:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid model mapping for '{instance_name}/{model_name}'.",
-                )
-            return self._resolve_model_targets(
-                next_instance,
-                next_model,
-                path=path + [node],
-                depth=depth + 1,
-                max_depth=max_depth,
-            )
-
-        if isinstance(mapping_value, list):
-            resolved = []
-            for ref in mapping_value:
-                next_instance, next_model = self._parse_target_reference(ref, instance_name)
-                if not next_instance or not next_model:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Invalid model mapping list for '{instance_name}/{model_name}'.",
-                    )
-                nested = self._resolve_model_targets(
-                    next_instance,
-                    next_model,
-                    path=path + [node],
-                    depth=depth + 1,
-                    max_depth=max_depth,
-                )
-                for item in nested:
-                    if item not in resolved:
-                        resolved.append(item)
-            if not resolved:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid empty model mapping list for '{instance_name}/{model_name}'.",
-                )
-            return resolved
-
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid model mapping type for '{instance_name}/{model_name}'.",
+        return resolve_oaic_model_targets(
+            self.instances_config,
+            instance_name,
+            model_name,
+            path=path,
+            depth=depth,
+            max_depth=max_depth,
         )
 
     def _build_failsafe_chain(self, primary_instance: str) -> List[str]:
-        instance_conf = self._get_instance_config(primary_instance)
-        chain = [primary_instance]
-        if instance_conf and instance_conf.get("failsafe_providers"):
-            for prov in instance_conf["failsafe_providers"]:
-                if prov not in chain:
-                    chain.append(prov)
-            return chain
-
-        enabled_instances = [inst["name"] for inst in self.instances_config if inst.get("enabled", True)]
-        if primary_instance in enabled_instances:
-            enabled_instances = [n for n in enabled_instances if n != primary_instance]
-        enabled_instances.insert(0, primary_instance)
-        return enabled_instances
+        return build_oaic_failsafe_chain(self.instances_config, primary_instance)
 
     # TODO: ApiKeyManager должен быть адаптирован для работы с ключами инстансов
     def _get_instance_api_key(self, instance_name: str) -> Optional[str]:

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 from typing import List
+from utils.config_store import read_json, write_json, update_json
 
 from admin_router import get_current_username, \
     ProxySettingName, UpdateProxySettingPayload, ModuleStatusPayload, AirouterSecurityPayload
@@ -45,12 +46,14 @@ async def ui_api_update_proxy_settings(
         elif payload.setting_name == ProxySettingName.FORCE_PROXY_ROTATION:
             if not isinstance(payload.value, bool):
                 raise HTTPException(status_code=400, detail="Invalid value type for force_proxy_rotation_after_request, boolean expected.")
-            with open(settings_file_path, 'r+') as f:
-                settings_data = json.load(f)
+
+            def _mutate_force_rotation(settings_data):
+                if not isinstance(settings_data, dict):
+                    settings_data = {}
                 settings_data.setdefault("proxy_settings", {})["force_proxy_rotation_after_request"] = payload.value
-                f.seek(0)
-                json.dump(settings_data, f, indent=2)
-                f.truncate()
+                return settings_data
+
+            update_json(settings_file_path, {}, _mutate_force_rotation, ensure_ascii=False)
             updated_setting = {"force_proxy_rotation_after_request": payload.value}
         elif payload.setting_name == ProxySettingName.SELECT_RANDOM_PROXY:
             if not isinstance(payload.value, bool):
@@ -64,7 +67,7 @@ async def ui_api_update_proxy_settings(
     except HTTPException as e:
         raise e 
     except Exception as e:
-        print(f"Error updating proxy setting via API: {e}")
+        logger.exception("Error updating proxy setting via API")
         raise HTTPException(status_code=500, detail=f"Could not update proxy setting '{payload.setting_name.value}'.")
 
 @router.put("/module/{module_name}/proxy-settings", name="ui_api_update_module_proxy_settings")
@@ -82,16 +85,17 @@ async def ui_api_update_module_proxy_settings(
 
     settings_file_path = request.app.state.settings_file_path
     try:
-        with open(settings_file_path, "r+") as f:
-            settings_data = json.load(f)
+        def _mutate_module_proxy(settings_data):
+            if not isinstance(settings_data, dict):
+                settings_data = {}
             settings_data.setdefault("module_proxy_usage", {})
             settings_data["module_proxy_usage"][module_name] = payload.use_global_proxy
-            f.seek(0)
-            json.dump(settings_data, f, indent=2)
-            f.truncate()
+            return settings_data
+
+        update_json(settings_file_path, {}, _mutate_module_proxy, ensure_ascii=False)
         return JSONResponse(content={"status": "success", "message": f"use_global_proxy for module '{module_name}' set to {payload.use_global_proxy}."})
     except Exception as e:
-        print(f"Error updating module proxy setting via API for {module_name}: {e}")
+        logger.exception("Error updating module proxy setting via API for %s", module_name)
         raise HTTPException(status_code=500, detail=f"Could not update use_global_proxy for module '{module_name}'.")
 
 
@@ -109,7 +113,7 @@ async def ui_api_update_module_status(
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Module '{module_name}' not found.")
     except Exception as e:
-        print(f"Error updating module status via API for {module_name}: {e}")
+        logger.exception("Error updating module status via API for %s", module_name)
         raise HTTPException(status_code=500, detail=f"Could not update status for module '{module_name}'.")
 
 @router.put("/airouter-security", name="ui_api_update_airouter_security") # Имя маршрута можно оставить
@@ -120,36 +124,30 @@ async def ui_api_update_airouter_security(
 ):
     settings_file_path = request.app.state.settings_file_path
     try:
-        with open(settings_file_path, 'r+') as f:
-            settings_data = json.load(f)
+        def _mutate_airouter_security(settings_data):
+            if not isinstance(settings_data, dict):
+                settings_data = {}
             settings_data["require_airouter_api_key"] = payload.require_api_key
-            f.seek(0)
-            json.dump(settings_data, f, indent=2)
-            f.truncate()
+            return settings_data
+
+        update_json(settings_file_path, {}, _mutate_airouter_security, ensure_ascii=False)
         # После изменения настройки, нужно перезагрузить конфигурацию в ModuleRegistry, если это влияет на загрузку модулей
         # или другие аспекты приложения. В данном случае, это может не требоваться немедленно.
         return JSONResponse(content={"status": "success", "message": f"AIRouter API key requirement set to {payload.require_api_key}."})
     except Exception as e:
-        print(f"Error updating AIRouter API key requirement via API: {e}")
+        logger.exception("Error updating AIRouter API key requirement via API")
         raise HTTPException(status_code=500, detail="Could not update AIRouter API key requirement settings.")
 
 # --- OpenAI Compatible Instances Management ---
 OPENAI_INSTANCES_CONFIG_PATH = "configs/openai_instances.json" # Определим путь к файлу
 
 def _load_openai_instances() -> list:
-    try:
-        with open(OPENAI_INSTANCES_CONFIG_PATH, 'r') as f:
-            return json.load(f)
-    except FileNotFoundError:
-        return []
-    except json.JSONDecodeError:
-        # Если файл существует, но пуст или содержит невалидный JSON
-        return []
+    data = read_json(OPENAI_INSTANCES_CONFIG_PATH, [])
+    return data if isinstance(data, list) else []
 
 
 def _save_openai_instances(instances: list):
-    with open(OPENAI_INSTANCES_CONFIG_PATH, 'w') as f:
-        json.dump(instances, f, indent=2)
+    write_json(OPENAI_INSTANCES_CONFIG_PATH, instances, ensure_ascii=False)
     # TODO: После сохранения нужно уведомить ModuleRegistry о необходимости перезагрузки OpenAICompatModule
     # или динамически обновить его конфигурацию, если это поддерживается.
 
