@@ -15,6 +15,7 @@ from modules.openai_compat_module import OpenAICompatModule
 from api_key_manager import ApiKeyManager
 from proxy_manager import ProxyManager 
 from airouter_key_manager import AIRouterApiKeyManager
+from modules.mcp_client_manager import MCPClientManager
 import admin_router
 import logging
 
@@ -55,6 +56,7 @@ GEMINI_KEYS_FILE = os.path.join(CONFIG_DIR, "gemini_keys.json")
 AIROUTER_KEYS_FILE = os.path.join(CONFIG_DIR, "airouter_api_keys.json")
 PROXIES_FILE = os.path.join(CONFIG_DIR, "proxies.json")
 OPENAI_INSTANCES_FILE = os.path.join(CONFIG_DIR, "openai_instances.json")
+MCP_SERVERS_FILE = os.path.join(CONFIG_DIR, "mcp_servers.json")
 
 def ensure_config_files_exist():
     """Проверяет/нормализует файлы конфигурации и заполняет отсутствующие значения по умолчанию."""
@@ -82,6 +84,7 @@ def ensure_config_files_exist():
         AIROUTER_KEYS_FILE: [],
         PROXIES_FILE: [],
         OPENAI_INSTANCES_FILE: [],
+        MCP_SERVERS_FILE: [],
         SETTINGS_FILE: default_settings
     }
 
@@ -183,11 +186,13 @@ def _register_available_modules(
         print("Warning: No Gemini API keys found. Gemini module will not be registered.")
 
     if oaic_instances:
-        target_registry.register(OpenAICompatModule(
+        oaic_module = OpenAICompatModule(
             instances_config=oaic_instances,
             proxy_manager=pm,
             settings_file_path=SETTINGS_FILE,
-        ))
+        )
+        oaic_module.app_state = app.state
+        target_registry.register(oaic_module)
     else:
         print("Warning: No OpenAI Compatible instances configured. OpenAI Compatible module will not be registered.")
 
@@ -255,6 +260,7 @@ app.state.module_registry = registry
 app.state.airouter_key_manager = airouter_key_manager
 app.state.settings_file_path = SETTINGS_FILE
 app.state.app_version = APP_VERSION
+app.state.mcp_manager = MCPClientManager(MCP_SERVERS_FILE)
 
 normalize_module_statuses_for_availability(registry)
 _register_available_modules(registry, key_manager, proxy_manager, openai_instances_config)
@@ -285,6 +291,7 @@ def reload_runtime_modules() -> dict:
     app.state.proxy_manager = proxy_manager
     app.state.module_registry = registry
     app.state.airouter_key_manager = airouter_key_manager
+    app.state.mcp_manager = MCPClientManager(MCP_SERVERS_FILE)
 
     return {
         "registered_modules": list(registry.get_all_module_statuses().keys()),
@@ -367,6 +374,8 @@ app.include_router(settings_api.router)
 app.include_router(keys_api.router)
 app.include_router(proxies_api.router)
 app.include_router(models_api.router) 
+from api.admin import mcp_api
+app.include_router(mcp_api.router)
 
 from api.airouter import openai_compatible
 app.include_router(openai_compatible.router)

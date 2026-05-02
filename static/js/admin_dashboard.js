@@ -1070,6 +1070,126 @@ function attachFormHandlers() {
     handlersAttached = true;
 }
 
+function setupAdminCategoryTabs() {
+    const tabsRoot = document.getElementById('admin_category_tabs');
+    if (!tabsRoot) return;
+    tabsRoot.addEventListener('click', (event) => {
+        const btn = event.target.closest('button[data-category]');
+        if (!btn) return;
+        const category = btn.dataset.category;
+        tabsRoot.querySelectorAll('.nav-link').forEach((n) => n.classList.remove('active'));
+        btn.classList.add('active');
+        document.querySelectorAll('.admin-category-card').forEach((card) => {
+            const own = String(card.dataset.category || '');
+            if (category === 'all' || own.split(/\s+/).includes(category)) {
+                card.style.display = '';
+            } else {
+                card.style.display = 'none';
+            }
+        });
+    });
+}
+
+async function loadMcpData() {
+    const section = document.getElementById('mcp_management_section');
+    if (!section) return;
+    try {
+        const [servers, toolsResponse] = await Promise.all([
+            makeApiRequest(URLS.getMcpServers),
+            makeApiRequest(URLS.listMcpTools),
+        ]);
+        const tools = Array.isArray(toolsResponse.tools) ? toolsResponse.tools : [];
+        const grouped = {};
+        tools.forEach((t) => {
+            const server = t.mcp_server || 'unknown';
+            if (!grouped[server]) grouped[server] = [];
+            grouped[server].push(t.name || 'unknown_tool');
+        });
+        if (!Array.isArray(servers) || servers.length === 0) {
+            section.innerHTML = '<p>Нет MCP серверов. Добавьте подключение ниже.</p>';
+            return;
+        }
+        section.innerHTML = servers.map((s) => {
+            const name = s.name;
+            const statusText = s.enabled ? 'Enabled' : 'Disabled';
+            const toolList = (grouped[name] || []).slice(0, 8).join(', ');
+            return `
+                <div class="card mb-3">
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between align-items-start gap-2">
+                            <div>
+                                <h5 class="mb-1">${name}</h5>
+                                <div class="small text-muted">${s.base_url}${s.jsonrpc_path || '/mcp'}</div>
+                                <div class="small">Policy: <code>${s.expose_policy || 'internal_only'}</code> | ${statusText}</div>
+                                <div class="small text-muted">Tools: ${toolList || 'none discovered'}</div>
+                            </div>
+                            <div class="d-flex gap-2">
+                                <button type="button" class="btn btn-outline-primary btn-sm mcp-test-btn" data-server="${name}">Test</button>
+                                <button type="button" class="btn btn-outline-danger btn-sm mcp-delete-btn" data-server="${name}">Delete</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    } catch (_e) {
+        section.innerHTML = '<p class="text-danger">Не удалось загрузить MCP данные.</p>';
+    }
+}
+
+function attachMcpHandlers() {
+    const form = document.getElementById('form_add_mcp_server');
+    if (form) {
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const payload = {
+                name: document.getElementById('mcp_name').value.trim(),
+                base_url: document.getElementById('mcp_base_url').value.trim(),
+                jsonrpc_path: document.getElementById('mcp_jsonrpc_path').value.trim() || '/mcp',
+                auth_token: document.getElementById('mcp_auth_token').value.trim(),
+                timeout_seconds: 20,
+                enabled: true,
+                expose_policy: 'internal_only',
+            };
+            try {
+                const res = await makeApiRequest(URLS.addMcpServer, 'POST', payload);
+                window.showNotification('notification_area', res.message || 'MCP сервер добавлен');
+                form.reset();
+                document.getElementById('mcp_jsonrpc_path').value = '/mcp';
+                await loadMcpData();
+            } catch (_e) {}
+        });
+    }
+    const section = document.getElementById('mcp_management_section');
+    if (!section) return;
+    section.addEventListener('click', async (event) => {
+        const testBtn = event.target.closest('.mcp-test-btn');
+        if (testBtn) {
+            const name = testBtn.dataset.server;
+            const url = URLS.testMcpServer.replace('SERVER_NAME_PLACEHOLDER', encodeURIComponent(name));
+            try {
+                const res = await makeApiRequest(url, 'POST', {});
+                window.showNotification('notification_area', res.ok ? `MCP ${name}: ok (${res.tools_count} tools)` : `MCP ${name}: ${res.error || 'error'}`, res.ok ? 'success' : 'error');
+            } catch (_e) {}
+            return;
+        }
+        const delBtn = event.target.closest('.mcp-delete-btn');
+        if (delBtn) {
+            const name = delBtn.dataset.server;
+            if (!window.confirm(`Удалить MCP сервер ${name}?`)) return;
+            const url = URLS.deleteMcpServer.replace('SERVER_NAME_PLACEHOLDER', encodeURIComponent(name));
+            try {
+                const res = await makeApiRequest(url, 'DELETE');
+                window.showNotification('notification_area', res.message || 'MCP сервер удален');
+                await loadMcpData();
+            } catch (_e) {}
+        }
+    });
+}
+
 document.addEventListener('DOMContentLoaded', function() {
+    setupAdminCategoryTabs();
+    attachMcpHandlers();
     loadDashboardData();
+    loadMcpData();
 });

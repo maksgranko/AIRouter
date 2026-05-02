@@ -162,6 +162,7 @@ async def get_dashboard_data(request: Request) -> Dict[str, Any]:
     proxy_manager = request.app.state.proxy_manager
     module_registry = request.app.state.module_registry
     airouter_key_manager = request.app.state.airouter_key_manager
+    mcp_manager = getattr(request.app.state, "mcp_manager", None)
 
     proxy_status_text = "Включено" if proxy_manager.active else "Выключено"
     
@@ -179,6 +180,14 @@ async def get_dashboard_data(request: Request) -> Dict[str, Any]:
     except Exception as e:
         logger.exception("Error reading settings for dashboard data")
         module_proxy_usage = {}
+
+    mcp_servers = mcp_manager.list_servers() if mcp_manager else []
+    mcp_tools_count = 0
+    if mcp_manager:
+        try:
+            mcp_tools_count = len(await mcp_manager.list_all_tools())
+        except Exception:
+            logger.exception("Error loading MCP tools for dashboard data")
 
     return {
         "proxy_manager_is_active": proxy_manager.active,
@@ -202,6 +211,9 @@ async def get_dashboard_data(request: Request) -> Dict[str, Any]:
         "airouter_keys_file": airouter_key_manager.keys_file_path,
         "openai_instances_file": "configs/openai_instances.json", # Путь к файлу инстансов
         "openai_instances": _load_openai_instances(), # Список инстансов
+        "mcp_servers": mcp_servers,
+        "mcp_servers_count": len(mcp_servers),
+        "mcp_tools_count": mcp_tools_count,
         "app_version": request.app.state.app_version,
         "module_proxy_usage": module_proxy_usage
     }

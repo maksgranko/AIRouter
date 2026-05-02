@@ -36,7 +36,16 @@
     <div class="container">
         <h1 class="mb-4">Панель Администратора</h1>
 
-        <div class="row">
+        <ul class="nav nav-pills mb-4" id="admin_category_tabs">
+            <li class="nav-item"><button class="nav-link active" type="button" data-category="all">Все</button></li>
+            <li class="nav-item"><button class="nav-link" type="button" data-category="providers">Провайдеры</button></li>
+            <li class="nav-item"><button class="nav-link" type="button" data-category="keys">Ключи</button></li>
+            <li class="nav-item"><button class="nav-link" type="button" data-category="proxy">Прокси</button></li>
+            <li class="nav-item"><button class="nav-link" type="button" data-category="security">Безопасность</button></li>
+            <li class="nav-item"><button class="nav-link" type="button" data-category="mcp">MCP</button></li>
+        </ul>
+
+        <div class="row admin-category-card" data-category="proxy security">
             <div class="col-md-6 mb-4">
                 <div class="card">
                     <div class="card-header"><h2>Настройки Прокси</h2></div>
@@ -133,7 +142,7 @@
         </div>
 
 
-        <div class="card mb-4">
+        <div class="card mb-4 admin-category-card" data-category="keys">
             <div class="card-header"><h2>Управление API Ключами</h2></div>
             <div class="card-body" id="api_keys_management_section">
                 <p class="placeholder">Загрузка ключей API...</p>
@@ -141,7 +150,7 @@
             <div class="card-footer instructions alert alert-secondary">Добавление/удаление ключей обновляет JSON-файлы и конфигурацию.</div>
         </div>
 
-        <div id="proxy_management_section_container" class="card mb-4" style="display:none;">
+        <div id="proxy_management_section_container" class="card mb-4 admin-category-card" data-category="proxy" style="display:none;">
             <div class="card-header"><h2>Управление Прокси-серверами</h2></div>
             <div class="card-body" id="proxy_management_content">
                 <p class="placeholder">Загрузка списка прокси...</p>
@@ -151,7 +160,7 @@
             </div>
         </div>
 
-        <div class="card mb-4">
+        <div class="card mb-4 admin-category-card" data-category="providers">
             <div class="card-header"><h2>Управление Модулями (Сервисами)</h2></div>
             <div class="card-body" id="module_management_section">
                 <p class="placeholder">Загрузка статусов модулей...</p>
@@ -171,7 +180,7 @@
             </div>
         </div>
 
-        <div class="card mb-4">
+        <div class="card mb-4 admin-category-card" data-category="providers">
             <div class="card-header"><h2>Управление Инстансами OpenAI Compatible</h2></div>
             <div class="card-body" id="openai_instances_management_section">
                 <p class="placeholder">Загрузка инстансов OpenAI Compatible...</p>
@@ -209,7 +218,7 @@
             </div>
         </div>
 
-        <div id="airouter_api_keys_section_container" class="card mb-4" style="display:none;">
+        <div id="airouter_api_keys_section_container" class="card mb-4 admin-category-card" data-category="keys security" style="display:none;">
             <div class="card-header"><h3 id="airouter_keys_title">API-ключи AIRouter (из файла: <span id="airouter_keys_file_display" class="fw-normal">...</span>)</h3></div>
             <div class="card-body">
                 <div id="airouter_api_keys_list">
@@ -221,6 +230,25 @@
             </div>
             <div class="card-footer instructions alert alert-secondary">
                 Добавление/удаление ключей обновляет файл <code id="airouter_keys_file_instruction_display">...</code>.
+            </div>
+        </div>
+
+        <div class="card mb-4 admin-category-card" data-category="mcp">
+            <div class="card-header"><h2>MCP Подключения и Инструменты</h2></div>
+            <div class="card-body" id="mcp_management_section">
+                <p class="placeholder">Загрузка MCP серверов...</p>
+            </div>
+            <div class="card-footer">
+                <form id="form_add_mcp_server">
+                    <h5>Добавить MCP сервер</h5>
+                    <div class="row g-2">
+                        <div class="col-md-3"><input type="text" class="form-control" id="mcp_name" placeholder="name" required></div>
+                        <div class="col-md-4"><input type="url" class="form-control" id="mcp_base_url" placeholder="https://mcp.example.com" required></div>
+                        <div class="col-md-2"><input type="text" class="form-control" id="mcp_jsonrpc_path" value="/mcp" placeholder="/mcp"></div>
+                        <div class="col-md-2"><input type="text" class="form-control" id="mcp_auth_token" placeholder="Bearer token (optional)"></div>
+                        <div class="col-md-1"><button type="submit" class="btn btn-success w-100">+</button></div>
+                    </div>
+                </form>
             </div>
         </div>
         
@@ -253,7 +281,14 @@
             addOpenAIInstance: "{{ url_for('ui_api_add_openai_instance') }}",
             deleteOpenAIInstance: "{{ url_for('ui_api_delete_openai_instance', instance_name='INSTANCE_NAME_PLACEHOLDER') }}",
             addOpenAIInstanceKey: "{{ url_for('ui_api_add_openai_instance_key', instance_name='INSTANCE_NAME_PLACEHOLDER') }}",
-            deleteOpenAIInstanceKey: "{{ url_for('ui_api_delete_openai_instance_key', instance_name='INSTANCE_NAME_PLACEHOLDER') }}"
+            deleteOpenAIInstanceKey: "{{ url_for('ui_api_delete_openai_instance_key', instance_name='INSTANCE_NAME_PLACEHOLDER') }}",
+
+            getMcpServers: "{{ url_for('ui_api_get_mcp_servers') }}",
+            addMcpServer: "{{ url_for('ui_api_add_mcp_server') }}",
+            patchMcpServer: "{{ url_for('ui_api_patch_mcp_server', server_name='SERVER_NAME_PLACEHOLDER') }}",
+            deleteMcpServer: "{{ url_for('ui_api_delete_mcp_server', server_name='SERVER_NAME_PLACEHOLDER') }}",
+            testMcpServer: "{{ url_for('ui_api_test_mcp_server', server_name='SERVER_NAME_PLACEHOLDER') }}",
+            listMcpTools: "{{ url_for('ui_api_list_mcp_tools') }}"
         };
     </script>
     <script src="{{ url_for('static', path='js/notifications.js') }}?v={{ app_version }}" defer></script>

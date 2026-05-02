@@ -1,5 +1,6 @@
 import httpx
 from typing import Dict, Any, Optional, AsyncGenerator, List
+from copy import deepcopy
 
 from .base_module import BaseModule
 from api_key_manager import ApiKeyManager
@@ -975,12 +976,108 @@ class OpenAICompatModule(BaseModule):
                 if target_model:
                     payload_to_send["model"] = target_model
                 try:
-                    return await self._execute_non_streaming_with_rotation(current_instance, "POST", "/responses", payload_to_send)
+                    result = await self._execute_non_streaming_with_rotation(current_instance, "POST", "/responses", payload_to_send)
+                    return await self._maybe_execute_mcp_tools_and_continue(current_instance, payload_to_send, result)
                 except Exception as exc:
                     last_exc = exc
                     logger.warning(f"Failsafe for responses: instance '{current_instance}' failed: {exc}")
 
         raise HTTPException(status_code=503, detail=f"All response providers are unavailable. Details: {last_exc}")
+
+    async def _maybe_execute_mcp_tools_and_continue(
+        self,
+        instance_name: str,
+        original_payload: Dict[str, Any],
+        first_result: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        mcp_manager = None
+        app_state = getattr(self, "app_state", None)
+        if app_state is not None:
+            mcp_manager = getattr(app_state, "mcp_manager", None)
+        if mcp_manager is None:
+            return first_result
+
+        payload = deepcopy(original_payload)
+        current_result = first_result
+        max_hops = 4
+        for _ in range(max_hops):
+            tool_calls = self._extract_tool_calls_from_response(current_result)
+            if not tool_calls:
+                return current_result
+
+            tool_messages = []
+            for tool_call in tool_calls:
+                tool_name = tool_call.get("name")
+                arguments = tool_call.get("arguments") or {}
+                if not isinstance(arguments, dict):
+                    arguments = {"raw": arguments}
+                call_id = tool_call.get("id") or tool_call.get("call_id") or tool_name or "tool_call"
+                try:
+                    tool_result = await mcp_manager.call_tool(tool_name, arguments)
+                except Exception as exc:
+                    tool_result = {"error": str(exc)}
+                tool_messages.append({
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": tool_result,
+                })
+
+            existing_input = payload.get("input")
+            if isinstance(existing_input, list):
+                existing_input.extend(tool_messages)
+            elif existing_input is None:
+                payload["input"] = tool_messages
+            else:
+                payload["input"] = [existing_input] + tool_messages
+
+            current_result = await self._execute_non_streaming_with_rotation(instance_name, "POST", "/responses", payload)
+        return current_result
+
+    @staticmethod
+    def _extract_tool_calls_from_response(response: Dict[str, Any]) -> List[Dict[str, Any]]:
+        calls: List[Dict[str, Any]] = []
+        if not isinstance(response, dict):
+            return calls
+
+        output = response.get("output")
+        if isinstance(output, list):
+            for item in output:
+                if not isinstance(item, dict):
+                    continue
+                item_type = item.get("type")
+                if item_type in ("function_call", "tool_call"):
+                    calls.append(
+                        {
+                            "id": item.get("call_id") or item.get("id"),
+                            "name": item.get("name") or item.get("tool_name"),
+                            "arguments": item.get("arguments") or item.get("input") or {},
+                        }
+                    )
+
+        choices = response.get("choices")
+        if isinstance(choices, list) and choices:
+            first = choices[0] if isinstance(choices[0], dict) else {}
+            message = first.get("message") if isinstance(first, dict) else {}
+            tool_calls = message.get("tool_calls") if isinstance(message, dict) else None
+            if isinstance(tool_calls, list):
+                for tc in tool_calls:
+                    if not isinstance(tc, dict):
+                        continue
+                    fn = tc.get("function", {}) if isinstance(tc.get("function"), dict) else {}
+                    args = fn.get("arguments", {})
+                    if isinstance(args, str):
+                        try:
+                            args = json.loads(args)
+                        except Exception:
+                            args = {"raw": args}
+                    calls.append(
+                        {
+                            "id": tc.get("id"),
+                            "name": fn.get("name"),
+                            "arguments": args if isinstance(args, dict) else {"raw": args},
+                        }
+                    )
+        return [c for c in calls if c.get("name")]
 
     async def responses_stream(self, request: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
         model_identifier = request.get("model", "")

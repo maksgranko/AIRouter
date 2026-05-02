@@ -377,3 +377,24 @@ async def test_responses_lifecycle_methods(monkeypatch):
     assert calls[0] == ("inst1", "GET", "/responses")
     assert calls[1] == ("inst1", "GET", "/responses/resp_1")
     assert calls[2] == ("inst1", "POST", "/responses/resp_1/cancel")
+
+
+def test_extract_tool_calls_from_openai_like_response():
+    response = {
+        "choices": [
+            {
+                "message": {
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "function": {"name": "weather.get", "arguments": '{"city":"Paris"}'},
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+    calls = OpenAICompatModule._extract_tool_calls_from_response(response)
+    assert len(calls) == 1
+    assert calls[0]["name"] == "weather.get"
+    assert calls[0]["arguments"]["city"] == "Paris"
