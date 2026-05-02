@@ -108,6 +108,66 @@ class OpenAICompatModule(BaseModule):
             for current_instance in failsafe_chain:
                 yield target_instance, current_instance, target_model
 
+    @staticmethod
+    def _normalize_responses_stream_chunk(chunk: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(chunk, dict):
+            return {"type": "response.error", "error": {"message": "Invalid stream chunk type"}}
+        if "type" in chunk:
+            return chunk
+        if "error" in chunk:
+            return {"type": "response.failed", "error": chunk.get("error")}
+
+        choices = chunk.get("choices")
+        if isinstance(choices, list) and choices:
+            first = choices[0]
+            delta = first.get("delta", {}) if isinstance(first, dict) else {}
+            content = delta.get("content") if isinstance(delta, dict) else None
+            if content:
+                return {
+                    "type": "response.output_text.delta",
+                    "delta": content,
+                    "raw": chunk,
+                }
+            finish_reason = first.get("finish_reason") if isinstance(first, dict) else None
+            if finish_reason:
+                return {
+                    "type": "response.completed",
+                    "finish_reason": finish_reason,
+                    "raw": chunk,
+                }
+        return {"type": "response.event", "raw": chunk}
+
+    async def _stream_with_failsafe(
+        self,
+        attempt_plan: List[tuple],
+        endpoint_path: str,
+        base_request: Dict[str, Any],
+        normalize_for_responses: bool = False,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        last_exc = None
+        for _ in range(2):
+            for _, current_instance, target_model in self._iter_attempt_candidates(attempt_plan):
+                payload_to_send = dict(base_request)
+                payload_to_send["stream"] = True
+                if target_model:
+                    payload_to_send["model"] = target_model
+                try:
+                    stream = self._execute_streaming_with_rotation(current_instance, endpoint_path, payload_to_send)
+                    first_chunk = None
+                    async for chunk in stream:
+                        first_chunk = chunk
+                        break
+                    if first_chunk is None:
+                        raise Exception(f"Stream ended without chunks for {endpoint_path}.")
+                    yield self._normalize_responses_stream_chunk(first_chunk) if normalize_for_responses else first_chunk
+                    async for chunk in stream:
+                        yield self._normalize_responses_stream_chunk(chunk) if normalize_for_responses else chunk
+                    return
+                except Exception as exc:
+                    last_exc = exc
+                    logger.warning(f"Failsafe stream for '{endpoint_path}': instance '{current_instance}' failed: {exc}")
+        raise HTTPException(status_code=503, detail=f"All stream providers unavailable for {endpoint_path}. Details: {last_exc}")
+
     # TODO: ApiKeyManager должен быть адаптирован для работы с ключами инстансов
     def _get_instance_api_key(self, instance_name: str) -> Optional[str]:
         instance_config = self._get_instance_config(instance_name)
@@ -744,6 +804,74 @@ class OpenAICompatModule(BaseModule):
             logger.error(f"Error during multipart request for instance {instance_name}: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Multipart request failed: {str(e)}")
 
+    async def _post_json_raw_to_instance(
+        self,
+        instance_name: str,
+        endpoint_path: str,
+        payload: Dict[str, Any],
+        accept_header: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        instance_config = self._get_instance_config(instance_name)
+        if not instance_config:
+            raise HTTPException(status_code=400, detail=f"Instance '{instance_name}' not found.")
+
+        base_url = instance_config["base_url"]
+        api_key = self._get_instance_api_key(instance_name)
+        target_url = f"{base_url.rstrip('/')}{endpoint_path}"
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        if accept_header:
+            headers["Accept"] = accept_header
+
+        httpx_proxies = None
+        if self.proxy_manager.active:
+            current_proxy_config = self.proxy_manager.get_proxy()
+            httpx_proxies = self._get_httpx_proxies(current_proxy_config)
+
+        client_args = build_async_client_args(httpx_proxies, timeout=60.0)
+
+        try:
+            async with httpx.AsyncClient(**client_args) as client:
+                response = await client.post(target_url, headers=headers, json=payload)
+                response.raise_for_status()
+                return {
+                    "content": response.content,
+                    "content_type": response.headers.get("content-type", "application/octet-stream"),
+                }
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTPStatusError during raw JSON request for instance {instance_name}: {e.response.text}")
+            raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+        except Exception as e:
+            logger.error(f"Error during raw JSON request for instance {instance_name}: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Raw JSON request failed: {str(e)}")
+
+    async def retrieve_model(self, model_id: str) -> Dict[str, Any]:
+        if "/" in model_id:
+            instance_name, actual_model_name = self.parse_instance_and_model_id(model_id)
+            if instance_name and actual_model_name:
+                resolved_instance, resolved_model = self._resolve_instance_and_model(instance_name, actual_model_name)
+                return await self._execute_non_streaming_with_rotation(resolved_instance, "GET", f"/models/{resolved_model}")
+
+            raw_instance = model_id.split("/", 1)[0]
+            if raw_instance and self._get_instance_config(raw_instance):
+                actual = model_id.split("/", 1)[1]
+                resolved_instance, resolved_model = self._resolve_instance_and_model(raw_instance, actual)
+                return await self._execute_non_streaming_with_rotation(resolved_instance, "GET", f"/models/{resolved_model}")
+
+        for instance_conf in self.instances_config:
+            if not instance_conf.get("enabled", True):
+                continue
+            instance_name = instance_conf["name"]
+            try:
+                return await self._execute_non_streaming_with_rotation(instance_name, "GET", f"/models/{model_id}")
+            except HTTPException as e:
+                if e.status_code == 404:
+                    continue
+                raise
+
+        raise HTTPException(status_code=404, detail=f"Model '{model_id}' not found in OAIC instances.")
+
     async def generate_image_edit(
         self,
         request_params: Dict[str, Any],
@@ -816,7 +944,12 @@ class OpenAICompatModule(BaseModule):
         if actual_model_name:
             payload_to_send["model"] = actual_model_name
 
-        return await self._execute_non_streaming_with_rotation(instance_name, "POST", "/audio/speech", payload_to_send)
+        return await self._post_json_raw_to_instance(
+            instance_name,
+            "/audio/speech",
+            payload_to_send,
+            accept_header="audio/*",
+        )
 
     async def responses(self, request: Dict[str, Any]) -> Dict[str, Any]:
         model_identifier = request.get("model", "")
@@ -848,3 +981,56 @@ class OpenAICompatModule(BaseModule):
                     logger.warning(f"Failsafe for responses: instance '{current_instance}' failed: {exc}")
 
         raise HTTPException(status_code=503, detail=f"All response providers are unavailable. Details: {last_exc}")
+
+    async def responses_stream(self, request: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+        model_identifier = request.get("model", "")
+        instance_name, actual_model_name = self.parse_instance_and_model_id(model_identifier)
+        if not instance_name:
+            if self.instances_config:
+                instance_name = self.instances_config[0]["name"]
+            else:
+                raise HTTPException(status_code=500, detail="No OpenAI Compatible instances configured for responses stream.")
+
+        if actual_model_name:
+            resolved_targets = self._resolve_model_targets(instance_name, actual_model_name)
+        else:
+            resolved_targets = [(instance_name, actual_model_name)]
+
+        attempt_plan = self._build_attempt_plan(resolved_targets)
+        async for chunk in self._stream_with_failsafe(
+            attempt_plan,
+            "/responses",
+            request,
+            normalize_for_responses=True,
+        ):
+            yield chunk
+
+    async def list_responses(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        model_identifier = request.get("model", "")
+        instance_name, _ = self.parse_instance_and_model_id(model_identifier)
+        if not instance_name:
+            if self.instances_config:
+                instance_name = self.instances_config[0]["name"]
+            else:
+                raise HTTPException(status_code=500, detail="No OpenAI Compatible instances configured for responses list.")
+        return await self._execute_non_streaming_with_rotation(instance_name, "GET", "/responses")
+
+    async def retrieve_response(self, response_id: str, request: Dict[str, Any]) -> Dict[str, Any]:
+        model_identifier = request.get("model", "")
+        instance_name, _ = self.parse_instance_and_model_id(model_identifier)
+        if not instance_name:
+            if self.instances_config:
+                instance_name = self.instances_config[0]["name"]
+            else:
+                raise HTTPException(status_code=500, detail="No OpenAI Compatible instances configured for response retrieval.")
+        return await self._execute_non_streaming_with_rotation(instance_name, "GET", f"/responses/{response_id}")
+
+    async def cancel_response(self, response_id: str, request: Dict[str, Any]) -> Dict[str, Any]:
+        model_identifier = request.get("model", "")
+        instance_name, _ = self.parse_instance_and_model_id(model_identifier)
+        if not instance_name:
+            if self.instances_config:
+                instance_name = self.instances_config[0]["name"]
+            else:
+                raise HTTPException(status_code=500, detail="No OpenAI Compatible instances configured for response cancellation.")
+        return await self._execute_non_streaming_with_rotation(instance_name, "POST", f"/responses/{response_id}/cancel", request)

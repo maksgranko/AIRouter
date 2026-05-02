@@ -303,20 +303,20 @@ class OpenAIChatModule(BaseModule):
                 lambda: openai.Image.create_variation(image=image_file, **req_copy)
             )
 
-    async def audio_transcription(self, request: Dict[str, Any], file_data: bytes) -> Dict[str, Any]:
+    async def audio_transcription(self, request: Dict[str, Any], file_data: bytes, filename: Optional[str] = None) -> Dict[str, Any]:
         req_copy = request.copy()
-        filename = req_copy.pop("filename", "audio.mp3")
+        filename_to_use = filename or req_copy.pop("filename", "audio.mp3")
         with io.BytesIO(file_data) as audio_file:
-            audio_file.name = filename
+            audio_file.name = filename_to_use
             return await self._execute_with_rotation(
                 lambda: openai.Audio.transcribe(file=audio_file, **req_copy)
             )
 
-    async def audio_translation(self, request: Dict[str, Any], file_data: bytes) -> Dict[str, Any]:
+    async def audio_translation(self, request: Dict[str, Any], file_data: bytes, filename: Optional[str] = None) -> Dict[str, Any]:
         req_copy = request.copy()
-        filename = req_copy.pop("filename", "audio.mp3")
+        filename_to_use = filename or req_copy.pop("filename", "audio.mp3")
         with io.BytesIO(file_data) as audio_file:
-            audio_file.name = filename
+            audio_file.name = filename_to_use
             return await self._execute_with_rotation(
                 lambda: openai.Audio.translate(file=audio_file, **req_copy)
             )

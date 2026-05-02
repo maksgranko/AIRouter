@@ -4,7 +4,7 @@ import logging
 from typing import AsyncGenerator, Dict, Any, Optional
 
 from fastapi import APIRouter, Form, Request, UploadFile, HTTPException, File
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 
 # Получаем глобальный registry и logger из app.state, если они там есть,
 # или импортируем напрямую, если это возможно и безопасно.
@@ -359,11 +359,56 @@ async def audio_translation(
 async def audio_speech(request: Request):
     body = await request.json()
     module = get_module(request, body)
-    return await _call_optional_module_method(module, "audio_speech", body)
+    result = await _call_optional_module_method(module, "audio_speech", body)
+    if isinstance(result, dict) and "content" in result:
+        return Response(content=result["content"], media_type=result.get("content_type", "application/octet-stream"))
+    return result
 
 
 @router.post("/v1/responses")
 async def responses(request: Request):
     body = await request.json()
     module = get_module(request, body)
+    if body.get("stream"):
+        stream_method = _require_module_method(module, "responses_stream")
+        if inspect.isasyncgenfunction(stream_method):
+            actual_generator = stream_method(body)
+            return StreamingResponse(sse_event_formatter(actual_generator), media_type="text/event-stream")
+        try:
+            maybe_generator = await stream_method(body)
+        except NotImplementedError:
+            raise HTTPException(
+                status_code=501,
+                detail=f"Endpoint is not supported by module '{module.get_name()}'.",
+            )
+        if hasattr(maybe_generator, "__aiter__"):
+            return StreamingResponse(sse_event_formatter(maybe_generator), media_type="text/event-stream")
+        raise HTTPException(status_code=500, detail="responses_stream did not return an async generator")
     return await _call_optional_module_method(module, "responses", body)
+
+
+@router.get("/v1/responses")
+async def list_responses(request: Request):
+    query = dict(request.query_params)
+    model_name_to_use = query.get("model", "openai")
+    module = get_module(request, {"model": model_name_to_use})
+    query["model"] = model_name_to_use
+    return await _call_optional_module_method(module, "list_responses", query)
+
+
+@router.get("/v1/responses/{response_id}")
+async def retrieve_response(response_id: str, request: Request):
+    query = dict(request.query_params)
+    model_name_to_use = query.get("model", "openai")
+    module = get_module(request, {"model": model_name_to_use})
+    query["model"] = model_name_to_use
+    return await _call_optional_module_method(module, "retrieve_response", response_id, query)
+
+
+@router.post("/v1/responses/{response_id}/cancel")
+async def cancel_response(response_id: str, request: Request):
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    model_name_to_use = body.get("model", "openai")
+    module = get_module(request, {"model": model_name_to_use})
+    body["model"] = model_name_to_use
+    return await _call_optional_module_method(module, "cancel_response", response_id, body)

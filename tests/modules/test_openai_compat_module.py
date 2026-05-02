@@ -298,3 +298,82 @@ async def test_completion_uses_redirect_list_fallback(monkeypatch):
     assert result["choices"][0]["text"] == "ok-fallback"
     assert attempts[0] == ("inst1", "google/gemini-2.5-exp")
     assert attempts[1] == ("inst2", "white/gemini-2.5-flash-cool")
+
+
+@pytest.mark.asyncio
+async def test_retrieve_model_with_prefixed_identifier(monkeypatch):
+    module = make_module()
+
+    captured = {}
+
+    async def fake_call(instance_name, method, endpoint_path, payload=None, extra_headers=None):
+        captured["instance"] = instance_name
+        captured["method"] = method
+        captured["path"] = endpoint_path
+        return {"object": "model", "id": "gpt-4"}
+
+    monkeypatch.setattr(module, "_execute_non_streaming_with_rotation", fake_call)
+    result = await module.retrieve_model("OAIC/inst1/gpt-4")
+
+    assert result["object"] == "model"
+    assert captured["instance"] == "inst1"
+    assert captured["method"] == "GET"
+    assert captured["path"] == "/models/gpt-4"
+
+
+@pytest.mark.asyncio
+async def test_retrieve_model_without_prefix_tries_instances(monkeypatch):
+    module = make_module()
+
+    async def fake_call(instance_name, method, endpoint_path, payload=None, extra_headers=None):
+        if endpoint_path == "/models/missing":
+            raise HTTPException(status_code=404, detail="not found")
+        return {"object": "model", "id": "gpt-4"}
+
+    monkeypatch.setattr(module, "_execute_non_streaming_with_rotation", fake_call)
+
+    with pytest.raises(HTTPException) as exc:
+        await module.retrieve_model("missing")
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_responses_stream_normalizes_chat_chunks(monkeypatch):
+    module = make_module()
+
+    async def fake_stream(instance_name, endpoint_path, payload=None, extra_headers=None):
+        yield {"choices": [{"delta": {"content": "hello"}}]}
+        yield {"choices": [{"delta": {}, "finish_reason": "stop"}]}
+
+    monkeypatch.setattr(module, "_execute_streaming_with_rotation", fake_stream)
+
+    got = []
+    async for chunk in module.responses_stream({"model": "OAIC/inst1/gpt-4", "input": "hi", "stream": True}):
+        got.append(chunk)
+
+    assert got[0]["type"] == "response.output_text.delta"
+    assert got[0]["delta"] == "hello"
+    assert got[1]["type"] == "response.completed"
+
+
+@pytest.mark.asyncio
+async def test_responses_lifecycle_methods(monkeypatch):
+    module = make_module()
+    calls = []
+
+    async def fake_call(instance_name, method, endpoint_path, payload=None, extra_headers=None):
+        calls.append((instance_name, method, endpoint_path))
+        return {"ok": True, "path": endpoint_path}
+
+    monkeypatch.setattr(module, "_execute_non_streaming_with_rotation", fake_call)
+
+    listed = await module.list_responses({"model": "OAIC/inst1/gpt-4"})
+    retrieved = await module.retrieve_response("resp_1", {"model": "OAIC/inst1/gpt-4"})
+    cancelled = await module.cancel_response("resp_1", {"model": "OAIC/inst1/gpt-4"})
+
+    assert listed["ok"] is True
+    assert retrieved["ok"] is True
+    assert cancelled["ok"] is True
+    assert calls[0] == ("inst1", "GET", "/responses")
+    assert calls[1] == ("inst1", "GET", "/responses/resp_1")
+    assert calls[2] == ("inst1", "POST", "/responses/resp_1/cancel")

@@ -17,3 +17,5 @@
 /tests/unit/__pycache__
 /tests/modules/__pycache__
 /tests/smoke/__pycache__
+/utils/__pycache__
+*.pyc

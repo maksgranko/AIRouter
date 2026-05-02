@@ -49,10 +49,28 @@ class FakeModule:
     async def responses(self, request):
         return {"id": "resp_123", "object": "response", "model": request.get("model")}
 
+    async def responses_stream(self, request):
+        yield {"id": "chunk-1", "choices": [{"delta": {"content": "hello"}}]}
+        yield {"id": "chunk-2", "choices": [{"delta": {}, "finish_reason": "stop"}]}
+
+    async def list_responses(self, request):
+        return {"object": "list", "data": [{"id": "resp_123", "status": "completed"}]}
+
+    async def retrieve_response(self, response_id, request):
+        return {"id": response_id, "object": "response", "status": "completed"}
+
+    async def cancel_response(self, response_id, request):
+        return {"id": response_id, "object": "response", "status": "cancelled"}
+
 
 class FakeStreamingModule(FakeModule):
     async def chat_completion(self, request):
         yield {"id": "chunk-1", "choices": [{"delta": {"content": "hello"}}]}
+
+
+class FakeAudioBinaryModule(FakeModule):
+    async def audio_speech(self, request):
+        return {"content": b"RIFF....", "content_type": "audio/wav"}
 
 
 class FakeRegistry:
@@ -122,8 +140,41 @@ async def test_audio_speech_route(async_client, app_module):
     assert response.json()["ok"] is True
 
 
+async def test_audio_speech_binary_route(async_client, app_module):
+    app_module.app.state.module_registry = FakeRegistry(FakeAudioBinaryModule())
+    response = await async_client.post("/v1/audio/speech", json={"model": "openai", "input": "hello"})
+    assert response.status_code == 200
+    assert "audio/wav" in response.headers["content-type"]
+    assert response.content.startswith(b"RIFF")
+
+
 async def test_responses_route(async_client, app_module):
     app_module.app.state.module_registry = FakeRegistry(FakeModule())
     response = await async_client.post("/v1/responses", json={"model": "openai", "input": "hello"})
     assert response.status_code == 200
     assert response.json()["object"] == "response"
+
+
+async def test_responses_stream_route(async_client, app_module):
+    app_module.app.state.module_registry = FakeRegistry(FakeModule())
+    response = await async_client.post("/v1/responses", json={"model": "openai", "input": "hello", "stream": True})
+    assert response.status_code == 200
+    assert "text/event-stream" in response.headers["content-type"]
+    assert "hello" in response.text
+    assert "[DONE]" in response.text
+
+
+async def test_responses_lifecycle_routes(async_client, app_module):
+    app_module.app.state.module_registry = FakeRegistry(FakeModule())
+
+    list_resp = await async_client.get("/v1/responses", params={"model": "openai"})
+    assert list_resp.status_code == 200
+    assert list_resp.json()["object"] == "list"
+
+    get_resp = await async_client.get("/v1/responses/resp_123", params={"model": "openai"})
+    assert get_resp.status_code == 200
+    assert get_resp.json()["id"] == "resp_123"
+
+    cancel_resp = await async_client.post("/v1/responses/resp_123/cancel", json={"model": "openai"})
+    assert cancel_resp.status_code == 200
+    assert cancel_resp.json()["status"] == "cancelled"

@@ -74,3 +74,15 @@ class BaseModule(ABC):
 
     async def responses(self, request: Dict[str, Any]) -> Dict[str, Any]:
         raise NotImplementedError("responses is not supported by this module")
+
+    async def responses_stream(self, request: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
+        raise NotImplementedError("responses_stream is not supported by this module")
+
+    async def list_responses(self, request: Dict[str, Any]) -> Dict[str, Any]:
+        raise NotImplementedError("list_responses is not supported by this module")
+
+    async def retrieve_response(self, response_id: str, request: Dict[str, Any]) -> Dict[str, Any]:
+        raise NotImplementedError("retrieve_response is not supported by this module")
+
+    async def cancel_response(self, response_id: str, request: Dict[str, Any]) -> Dict[str, Any]:
+        raise NotImplementedError("cancel_response is not supported by this module")
