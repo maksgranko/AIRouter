@@ -122,6 +122,17 @@ class OpenAICompatModule(BaseModule):
         if isinstance(choices, list) and choices:
             first = choices[0]
             delta = first.get("delta", {}) if isinstance(first, dict) else {}
+            tool_calls = delta.get("tool_calls") if isinstance(delta, dict) else None
+            if isinstance(tool_calls, list) and tool_calls:
+                tool_call = tool_calls[0] if isinstance(tool_calls[0], dict) else {}
+                fn = tool_call.get("function", {}) if isinstance(tool_call.get("function"), dict) else {}
+                return {
+                    "type": "response.tool_call.delta",
+                    "call_id": tool_call.get("id"),
+                    "name": fn.get("name"),
+                    "arguments_delta": fn.get("arguments", ""),
+                    "raw": chunk,
+                }
             content = delta.get("content") if isinstance(delta, dict) else None
             if content:
                 return {
@@ -1079,6 +1090,40 @@ class OpenAICompatModule(BaseModule):
                     )
         return [c for c in calls if c.get("name")]
 
+    @staticmethod
+    def _collect_tool_calls_from_stream_events(events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        merged: Dict[str, Dict[str, Any]] = {}
+        for event in events:
+            if not isinstance(event, dict):
+                continue
+            if event.get("type") != "response.tool_call.delta":
+                continue
+            call_id = event.get("call_id") or "stream_tool_call"
+            if call_id not in merged:
+                merged[call_id] = {
+                    "id": call_id,
+                    "name": event.get("name"),
+                    "arguments_text": "",
+                }
+            if event.get("name") and not merged[call_id].get("name"):
+                merged[call_id]["name"] = event.get("name")
+            merged[call_id]["arguments_text"] += str(event.get("arguments_delta") or "")
+
+        tool_calls: List[Dict[str, Any]] = []
+        for value in merged.values():
+            if not value.get("name"):
+                continue
+            args = {}
+            text = value.get("arguments_text", "").strip()
+            if text:
+                try:
+                    parsed = json.loads(text)
+                    args = parsed if isinstance(parsed, dict) else {"raw": parsed}
+                except Exception:
+                    args = {"raw": text}
+            tool_calls.append({"id": value["id"], "name": value["name"], "arguments": args})
+        return tool_calls
+
     async def responses_stream(self, request: Dict[str, Any]) -> AsyncGenerator[Dict[str, Any], None]:
         model_identifier = request.get("model", "")
         instance_name, actual_model_name = self.parse_instance_and_model_id(model_identifier)
@@ -1094,13 +1139,66 @@ class OpenAICompatModule(BaseModule):
             resolved_targets = [(instance_name, actual_model_name)]
 
         attempt_plan = self._build_attempt_plan(resolved_targets)
-        async for chunk in self._stream_with_failsafe(
-            attempt_plan,
-            "/responses",
-            request,
-            normalize_for_responses=True,
-        ):
-            yield chunk
+        payload = dict(request)
+
+        max_hops = 3
+        for _ in range(max_hops):
+            stream_events: List[Dict[str, Any]] = []
+            async for chunk in self._stream_with_failsafe(
+                attempt_plan,
+                "/responses",
+                payload,
+                normalize_for_responses=True,
+            ):
+                stream_events.append(chunk)
+                yield chunk
+
+            tool_calls = self._collect_tool_calls_from_stream_events(stream_events)
+            if not tool_calls:
+                return
+
+            mcp_manager = None
+            app_state = getattr(self, "app_state", None)
+            if app_state is not None:
+                mcp_manager = getattr(app_state, "mcp_manager", None)
+            if mcp_manager is None:
+                yield {
+                    "type": "response.failed",
+                    "error": {"message": "MCP manager is not available for tool calls"},
+                }
+                return
+
+            tool_outputs = []
+            for tool_call in tool_calls:
+                try:
+                    result = await mcp_manager.call_tool(tool_call["name"], tool_call.get("arguments") or {})
+                except Exception as exc:
+                    result = {"error": str(exc)}
+                tool_outputs.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": tool_call.get("id") or tool_call["name"],
+                        "output": result,
+                    }
+                )
+                yield {
+                    "type": "response.tool_call.completed",
+                    "call_id": tool_call.get("id") or tool_call["name"],
+                    "name": tool_call["name"],
+                }
+
+            existing_input = payload.get("input")
+            if isinstance(existing_input, list):
+                payload["input"] = existing_input + tool_outputs
+            elif existing_input is None:
+                payload["input"] = tool_outputs
+            else:
+                payload["input"] = [existing_input] + tool_outputs
+
+        yield {
+            "type": "response.failed",
+            "error": {"message": "Tool orchestration exceeded maximum hops"},
+        }
 
     async def list_responses(self, request: Dict[str, Any]) -> Dict[str, Any]:
         model_identifier = request.get("model", "")

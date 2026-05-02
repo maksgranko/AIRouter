@@ -398,3 +398,46 @@ def test_extract_tool_calls_from_openai_like_response():
     assert len(calls) == 1
     assert calls[0]["name"] == "weather.get"
     assert calls[0]["arguments"]["city"] == "Paris"
+
+
+@pytest.mark.asyncio
+async def test_responses_stream_tool_orchestration(monkeypatch):
+    module = make_module()
+
+    class DummyMcpManager:
+        async def call_tool(self, tool_name, arguments, preferred_server=None):
+            assert tool_name == "weather.get"
+            return {"ok": True, "temp": 21, "city": arguments.get("city")}
+
+    class DummyState:
+        mcp_manager = DummyMcpManager()
+
+    module.app_state = DummyState()
+
+    async def fake_stream_with_failsafe(attempt_plan, endpoint_path, base_request, normalize_for_responses=False):
+        input_payload = base_request.get("input")
+        has_tool_output = isinstance(input_payload, list) and any(
+            isinstance(x, dict) and x.get("type") == "function_call_output" for x in input_payload
+        )
+        if not has_tool_output:
+            yield {
+                "type": "response.tool_call.delta",
+                "call_id": "call_1",
+                "name": "weather.get",
+                "arguments_delta": '{"city":"Paris"}',
+            }
+            yield {"type": "response.completed"}
+            return
+        yield {"type": "response.output_text.delta", "delta": "Weather is 21C"}
+        yield {"type": "response.completed"}
+
+    monkeypatch.setattr(module, "_stream_with_failsafe", fake_stream_with_failsafe)
+
+    got = []
+    async for chunk in module.responses_stream({"model": "OAIC/inst1/gpt-4", "input": "weather?", "stream": True}):
+        got.append(chunk)
+
+    types = [c.get("type") for c in got if isinstance(c, dict)]
+    assert "response.tool_call.delta" in types
+    assert "response.tool_call.completed" in types
+    assert "response.output_text.delta" in types
