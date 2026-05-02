@@ -101,6 +101,16 @@ async function loadDashboardData() {
         document.getElementById('config_gemini_path_display').innerText = data.gemini_keys_file;
         document.getElementById('config_proxies_path_display').innerText = data.proxies_file;
         document.getElementById('openai_instances_file_path_display').innerText = data.openai_instances_file; // Добавлено для нового файла
+        if (data.mcp_audit_settings) {
+            document.getElementById('mcp_audit_enabled').value = data.mcp_audit_settings.enabled ? 'true' : 'false';
+            document.getElementById('mcp_audit_retention_days').value = data.mcp_audit_settings.retention_days ?? 7;
+            document.getElementById('mcp_audit_gzip_enabled').value = data.mcp_audit_settings.gzip_enabled ? 'true' : 'false';
+        }
+        if (data.global_audit_settings) {
+            document.getElementById('global_audit_enabled').value = data.global_audit_settings.enabled ? 'true' : 'false';
+            document.getElementById('global_audit_retention_days').value = data.global_audit_settings.retention_days ?? 7;
+            document.getElementById('global_audit_gzip_enabled').value = data.global_audit_settings.gzip_enabled ? 'true' : 'false';
+        }
         
         // Управление API Ключами
         const apiKeysSection = document.getElementById('api_keys_management_section');
@@ -1317,9 +1327,121 @@ function attachMcpHandlers() {
     });
 }
 
+function attachLogsHandlers() {
+    const form = document.getElementById('form_mcp_audit_settings');
+    if (!form) return;
+    form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const payload = {
+            enabled: document.getElementById('mcp_audit_enabled').value === 'true',
+            retention_days: Number(document.getElementById('mcp_audit_retention_days').value || 0),
+            gzip_enabled: document.getElementById('mcp_audit_gzip_enabled').value === 'true',
+        };
+        try {
+            const res = await makeApiRequest(URLS.updateMcpAuditSettings, 'PUT', payload);
+            window.showNotification('notification_area', res.message || 'Log settings updated');
+            await loadDashboardData();
+        } catch (_e) {}
+    });
+
+    const globalForm = document.getElementById('form_global_audit_settings');
+    if (globalForm) {
+        globalForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const payload = {
+                enabled: document.getElementById('global_audit_enabled').value === 'true',
+                retention_days: Number(document.getElementById('global_audit_retention_days').value || 0),
+                gzip_enabled: document.getElementById('global_audit_gzip_enabled').value === 'true',
+            };
+            try {
+                const res = await makeApiRequest(URLS.updateGlobalAuditSettings, 'PUT', payload);
+                window.showNotification('notification_area', res.message || 'Global log settings updated');
+                await loadDashboardData();
+            } catch (_e) {}
+        });
+    }
+
+    const viewer = document.getElementById('logs_viewer_section');
+    if (viewer) {
+        viewer.addEventListener('click', async (event) => {
+            const delBtn = event.target.closest('.log-delete-btn');
+            if (delBtn) {
+                const name = delBtn.dataset.name;
+                if (!window.confirm(`Удалить лог ${name}?`)) return;
+                const url = URLS.deleteLogFile.replace('NAME_PLACEHOLDER', encodeURIComponent(name));
+                try {
+                    const res = await makeApiRequest(url, 'DELETE');
+                    window.showNotification('notification_area', res.message || 'Log deleted');
+                    await loadLogsViewer();
+                } catch (_e) {}
+                return;
+            }
+
+            const fileDelBtn = event.target.closest('.log-file-delete-btn');
+            if (fileDelBtn) {
+                const day = fileDelBtn.dataset.day;
+                const file = fileDelBtn.dataset.file;
+                if (!window.confirm(`Удалить лог ${day}/${file}?`)) return;
+                const url = URLS.deleteLogFileInDay
+                    .replace('DAY_PLACEHOLDER', encodeURIComponent(day))
+                    .replace('FILE_PLACEHOLDER', encodeURIComponent(file));
+                try {
+                    const res = await makeApiRequest(url, 'DELETE');
+                    window.showNotification('notification_area', res.message || 'Log file deleted');
+                    await loadLogsViewer();
+                } catch (_e) {}
+            }
+        });
+    }
+}
+
+async function loadLogsViewer() {
+    const viewer = document.getElementById('logs_viewer_section');
+    if (!viewer) return;
+    try {
+        const data = await makeApiRequest(URLS.listLogFiles);
+        const items = Array.isArray(data.logs) ? data.logs : [];
+        if (!items.length) {
+            viewer.innerHTML = '<p class="text-muted">Log files not found.</p>';
+            return;
+        }
+        viewer.innerHTML = `<ul class="list-group">${items.map((item) => {
+            const sizeKb = Math.round((item.size || 0) / 1024);
+            const day = item.name;
+            const files = Array.isArray(item.files) ? item.files : [];
+            const filesHtml = files.map((f) => {
+                const fileName = f.name;
+                const fileKb = Math.round((f.size || 0) / 1024);
+                const downloadUrl = URLS.downloadLogFileInDay
+                    .replace('DAY_PLACEHOLDER', encodeURIComponent(day))
+                    .replace('FILE_PLACEHOLDER', encodeURIComponent(fileName));
+                return `<li class="d-flex justify-content-between align-items-center py-1">
+                    <span><code>${fileName}</code> <small class="text-muted">${fileKb} KB</small></span>
+                    <span class="d-flex gap-2">
+                        <a class="btn btn-sm btn-outline-primary" href="${downloadUrl}">Download</a>
+                        <button type="button" class="btn btn-sm btn-outline-danger log-file-delete-btn" data-day="${day}" data-file="${fileName}">Delete</button>
+                    </span>
+                </li>`;
+            }).join('');
+
+            return `<li class="list-group-item">
+                <div class="d-flex justify-content-between align-items-center">
+                    <span><code>${day}</code> <small class="text-muted">${sizeKb} KB</small></span>
+                    <button type="button" class="btn btn-sm btn-outline-danger log-delete-btn" data-name="${day}">Delete day</button>
+                </div>
+                <ul class="mt-2 mb-0">${filesHtml || '<li class="text-muted">No files</li>'}</ul>
+            </li>`;
+        }).join('')}</ul>`;
+    } catch (_e) {
+        viewer.innerHTML = '<p class="text-danger">Failed to load logs.</p>';
+    }
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     setupAdminCategoryTabs();
     attachMcpHandlers();
+    attachLogsHandlers();
     loadDashboardData();
     loadMcpData();
+    loadLogsViewer();
 });

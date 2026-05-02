@@ -32,7 +32,11 @@ async def test_custom_tool_update_and_audit_log(tmp_path):
     result = await manager.call_tool("custom.echo", {"x": 1}, audit_context={"origin": "test"})
     assert result["echo"]["x"] == 1
 
-    lines = audit_path.read_text(encoding="utf-8").strip().splitlines()
+    day_dirs = [p for p in tmp_path.iterdir() if p.is_dir()]
+    assert day_dirs
+    mcp_log = day_dirs[0] / "mcp.log"
+    assert mcp_log.exists()
+    lines = mcp_log.read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) >= 1
     event = json.loads(lines[-1])
     assert event["tool"] == "custom.echo"

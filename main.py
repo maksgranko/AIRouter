@@ -16,8 +16,10 @@ from api_key_manager import ApiKeyManager
 from proxy_manager import ProxyManager 
 from airouter_key_manager import AIRouterApiKeyManager
 from modules.mcp_client_manager import MCPClientManager
+from modules.global_audit_logger import GlobalAuditLogger
 import admin_router
 import logging
+import time
 
 open_browser_on_save = False
 logging_type = logging.INFO
@@ -50,6 +52,7 @@ bearer_scheme = HTTPBearer()
 
 
 CONFIG_DIR = "configs"
+LOGS_DIR = "logs"
 SETTINGS_FILE = os.path.join(CONFIG_DIR, "settings.json")
 OPENAI_KEYS_FILE = os.path.join(CONFIG_DIR, "openai_keys.json")
 GEMINI_KEYS_FILE = os.path.join(CONFIG_DIR, "gemini_keys.json")
@@ -57,13 +60,18 @@ AIROUTER_KEYS_FILE = os.path.join(CONFIG_DIR, "airouter_api_keys.json")
 PROXIES_FILE = os.path.join(CONFIG_DIR, "proxies.json")
 OPENAI_INSTANCES_FILE = os.path.join(CONFIG_DIR, "openai_instances.json")
 MCP_SERVERS_FILE = os.path.join(CONFIG_DIR, "mcp_servers.json")
-MCP_AUDIT_LOG_FILE = os.path.join(CONFIG_DIR, "mcp_audit.log")
+MCP_AUDIT_LOG_FILE = os.path.join(LOGS_DIR, "mcp_audit.log")
+MCP_AUDIT_SETTINGS_FILE = os.path.join(CONFIG_DIR, "mcp_audit_settings.json")
+GLOBAL_AUDIT_SETTINGS_FILE = os.path.join(CONFIG_DIR, "global_audit_settings.json")
 
 def ensure_config_files_exist():
     """Проверяет/нормализует файлы конфигурации и заполняет отсутствующие значения по умолчанию."""
     if not os.path.exists(CONFIG_DIR):
         os.makedirs(CONFIG_DIR)
         print(f"Created directory: {CONFIG_DIR}")
+    if not os.path.exists(LOGS_DIR):
+        os.makedirs(LOGS_DIR)
+        print(f"Created directory: {LOGS_DIR}")
 
     default_settings = {
         "proxy_settings": {
@@ -87,6 +95,17 @@ def ensure_config_files_exist():
         OPENAI_INSTANCES_FILE: [],
         MCP_SERVERS_FILE: [],
         SETTINGS_FILE: default_settings
+    }
+
+    mcp_audit_defaults = {
+        "enabled": True,
+        "retention_days": 7,
+        "gzip_enabled": True,
+    }
+    global_audit_defaults = {
+        "enabled": True,
+        "retention_days": 7,
+        "gzip_enabled": True,
     }
 
     def _save_json(file_path: str, payload) -> None:
@@ -138,6 +157,36 @@ def ensure_config_files_exist():
             if not isinstance(loaded, list):
                 _save_json(file_path, default_content)
                 logger.warning(f"Config file '{file_path}' has invalid format. Recreated with defaults.")
+
+    if not os.path.exists(MCP_AUDIT_SETTINGS_FILE):
+        _save_json(MCP_AUDIT_SETTINGS_FILE, mcp_audit_defaults)
+    else:
+        try:
+            with open(MCP_AUDIT_SETTINGS_FILE, 'r') as f:
+                loaded = json.load(f)
+            if not isinstance(loaded, dict):
+                _save_json(MCP_AUDIT_SETTINGS_FILE, mcp_audit_defaults)
+            else:
+                merged, changed = _merge_dict_defaults(loaded, mcp_audit_defaults)
+                if changed:
+                    _save_json(MCP_AUDIT_SETTINGS_FILE, merged)
+        except Exception:
+            _save_json(MCP_AUDIT_SETTINGS_FILE, mcp_audit_defaults)
+
+    if not os.path.exists(GLOBAL_AUDIT_SETTINGS_FILE):
+        _save_json(GLOBAL_AUDIT_SETTINGS_FILE, global_audit_defaults)
+    else:
+        try:
+            with open(GLOBAL_AUDIT_SETTINGS_FILE, 'r') as f:
+                loaded = json.load(f)
+            if not isinstance(loaded, dict):
+                _save_json(GLOBAL_AUDIT_SETTINGS_FILE, global_audit_defaults)
+            else:
+                merged, changed = _merge_dict_defaults(loaded, global_audit_defaults)
+                if changed:
+                    _save_json(GLOBAL_AUDIT_SETTINGS_FILE, merged)
+        except Exception:
+            _save_json(GLOBAL_AUDIT_SETTINGS_FILE, global_audit_defaults)
 
 ensure_config_files_exist()
 
@@ -261,7 +310,11 @@ app.state.module_registry = registry
 app.state.airouter_key_manager = airouter_key_manager
 app.state.settings_file_path = SETTINGS_FILE
 app.state.app_version = APP_VERSION
-app.state.mcp_manager = MCPClientManager(MCP_SERVERS_FILE, audit_log_path=MCP_AUDIT_LOG_FILE)
+app.state.mcp_manager = MCPClientManager(MCP_SERVERS_FILE, audit_log_path=MCP_AUDIT_LOG_FILE, settings_file_path=MCP_AUDIT_SETTINGS_FILE)
+app.state.mcp_audit_settings_file_path = MCP_AUDIT_SETTINGS_FILE
+app.state.global_audit_settings_file_path = GLOBAL_AUDIT_SETTINGS_FILE
+app.state.logs_dir = LOGS_DIR
+app.state.global_audit_logger = GlobalAuditLogger(LOGS_DIR, GLOBAL_AUDIT_SETTINGS_FILE)
 
 normalize_module_statuses_for_availability(registry)
 _register_available_modules(registry, key_manager, proxy_manager, openai_instances_config)
@@ -292,7 +345,11 @@ def reload_runtime_modules() -> dict:
     app.state.proxy_manager = proxy_manager
     app.state.module_registry = registry
     app.state.airouter_key_manager = airouter_key_manager
-    app.state.mcp_manager = MCPClientManager(MCP_SERVERS_FILE, audit_log_path=MCP_AUDIT_LOG_FILE)
+    app.state.mcp_manager = MCPClientManager(MCP_SERVERS_FILE, audit_log_path=MCP_AUDIT_LOG_FILE, settings_file_path=MCP_AUDIT_SETTINGS_FILE)
+    app.state.mcp_audit_settings_file_path = MCP_AUDIT_SETTINGS_FILE
+    app.state.global_audit_settings_file_path = GLOBAL_AUDIT_SETTINGS_FILE
+    app.state.logs_dir = LOGS_DIR
+    app.state.global_audit_logger = GlobalAuditLogger(LOGS_DIR, GLOBAL_AUDIT_SETTINGS_FILE)
 
     return {
         "registered_modules": list(registry.get_all_module_statuses().keys()),
@@ -310,11 +367,65 @@ app.state.reload_runtime_modules = reload_runtime_modules
 
 @app.middleware("http")
 async def check_airouter_api_key(request: Request, call_next):
+    start = time.perf_counter()
+    body_model_name = None
+    try:
+        content_type = request.headers.get("content-type", "")
+        if content_type.startswith("application/json"):
+            raw_body = await request.body()
+            if raw_body:
+                parsed_body = json.loads(raw_body)
+                if isinstance(parsed_body, dict):
+                    model_val = parsed_body.get("model")
+                    if isinstance(model_val, str):
+                        body_model_name = model_val
+    except Exception:
+        body_model_name = None
+
+    def _resolve_module_name() -> str:
+        if body_model_name:
+            if "/" in body_model_name:
+                prefix = body_model_name.split("/", 1)[0]
+                if prefix == "OAIC":
+                    remainder = body_model_name.split("/", 2)
+                    if len(remainder) >= 2 and remainder[1]:
+                        return remainder[1]
+                if prefix.startswith("openai_"):
+                    return prefix.replace("openai_", "", 1)
+                return prefix
+            if body_model_name.startswith("openai_"):
+                return body_model_name.replace("openai_", "", 1)
+            return body_model_name
+
+        path = request.url.path
+        if path.startswith("/api/admin") or path.startswith("/admin"):
+            return "admin"
+        if path.startswith("/v1/"):
+            return "api"
+        return "system"
+
+    def _audit(status_code: int):
+        logger_obj = getattr(app.state, "global_audit_logger", None)
+        if not logger_obj:
+            return
+        latency_ms = int((time.perf_counter() - start) * 1000)
+        logger_obj.log_event(
+            {
+                "path": request.url.path,
+                "method": request.method,
+                "status_code": status_code,
+                "latency_ms": latency_ms,
+                "client": request.client.host if request.client else "unknown",
+                "module_name": _resolve_module_name(),
+            }
+        )
+
     if request.url.path == "/favicon.ico" or \
        request.url.path.startswith("/static") or \
        request.url.path.startswith("/admin") or \
        request.url.path.startswith("/api/admin/"):
         response = await call_next(request)
+        _audit(response.status_code)
         return response
 
     try:
@@ -323,6 +434,7 @@ async def check_airouter_api_key(request: Request, call_next):
         require_key = settings.get("require_airouter_api_key", False)
     except Exception:
         logger.error(f"Could not read settings file at {app.state.settings_file_path} for API key check. Denying access by default.")
+        _audit(500)
         return JSONResponse(
             status_code=500,
             content={"detail": "Server configuration error, cannot verify API key requirement."}
@@ -333,6 +445,7 @@ async def check_airouter_api_key(request: Request, call_next):
             auth_header: Optional[HTTPAuthorizationCredentials] = await bearer_scheme(request)
         except HTTPException as e:
             logger.warning(f"Authorization header issue for {request.url.path}: {e.detail}")
+            _audit(401)
             return JSONResponse(
                 status_code=401,
                 content={"Error": "Authorization header is missing or invalid. Use Bearer token."},
@@ -341,6 +454,7 @@ async def check_airouter_api_key(request: Request, call_next):
         
         if not auth_header:
             logger.warning(f"Authorization header could not be processed for {request.url.path}")
+            _audit(401)
             return JSONResponse(
                 status_code=401,
                 content={"Error": "Not authenticated. Bearer token could not be processed."},
@@ -352,6 +466,7 @@ async def check_airouter_api_key(request: Request, call_next):
         
         if not air_key_manager.key_exists(token):
             logger.warning(f"Invalid API Key received: '{token}' for {request.url.path}")
+            _audit(403)
             return JSONResponse(
                 status_code=403,
                 content={"Error": "Auth data is not valid. Check API-Key on dashboard."}
@@ -359,6 +474,7 @@ async def check_airouter_api_key(request: Request, call_next):
         logger.debug(f"Valid API Key received for {request.url.path}")
 
     response = await call_next(request)
+    _audit(response.status_code)
     return response
 
 try:
@@ -369,12 +485,13 @@ except Exception as e:
 
 app.include_router(admin_router.router)
 
-from api.admin import dashboard_api, settings_api, keys_api, proxies_api, models_api
+from api.admin import dashboard_api, settings_api, keys_api, proxies_api, models_api, logs_api
 app.include_router(dashboard_api.router)
 app.include_router(settings_api.router)
 app.include_router(keys_api.router)
 app.include_router(proxies_api.router)
 app.include_router(models_api.router) 
+app.include_router(logs_api.router)
 from api.admin import mcp_api
 app.include_router(mcp_api.router)
 

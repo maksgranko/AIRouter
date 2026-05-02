@@ -43,6 +43,7 @@
             <li class="nav-item"><button class="nav-link" type="button" data-category="proxy">Прокси</button></li>
             <li class="nav-item"><button class="nav-link" type="button" data-category="security">Безопасность</button></li>
             <li class="nav-item"><button class="nav-link" type="button" data-category="mcp">MCP</button></li>
+            <li class="nav-item"><button class="nav-link" type="button" data-category="logs">Logs</button></li>
         </ul>
 
         <div class="row admin-category-card" data-category="proxy security">
@@ -251,6 +252,66 @@
                 </form>
             </div>
         </div>
+
+        <div class="card mb-4 admin-category-card" data-category="logs">
+            <div class="card-header"><h2>Logs / Аудит</h2></div>
+            <div class="card-body">
+                <h6>Global AIRouter audit</h6>
+                <form id="form_global_audit_settings" class="row g-3 align-items-end mb-4">
+                    <div class="col-md-3">
+                        <label class="form-label" for="global_audit_enabled">Global audit</label>
+                        <select id="global_audit_enabled" class="form-select form-select-sm">
+                            <option value="true">Enabled</option>
+                            <option value="false">Disabled</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" for="global_audit_retention_days">Retention days</label>
+                        <input id="global_audit_retention_days" type="number" min="0" max="3650" class="form-control form-control-sm" value="7">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" for="global_audit_gzip_enabled">Compression</label>
+                        <select id="global_audit_gzip_enabled" class="form-select form-select-sm">
+                            <option value="true">gzip</option>
+                            <option value="false">none</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <button class="btn btn-primary btn-sm" type="submit">Сохранить</button>
+                    </div>
+                </form>
+
+                <h6>MCP audit</h6>
+                <form id="form_mcp_audit_settings" class="row g-3 align-items-end">
+                    <div class="col-md-3">
+                        <label class="form-label" for="mcp_audit_enabled">MCP audit</label>
+                        <select id="mcp_audit_enabled" class="form-select form-select-sm">
+                            <option value="true">Enabled</option>
+                            <option value="false">Disabled</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" for="mcp_audit_retention_days">Retention days</label>
+                        <input id="mcp_audit_retention_days" type="number" min="0" max="3650" class="form-control form-control-sm" value="7">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" for="mcp_audit_gzip_enabled">Compression</label>
+                        <select id="mcp_audit_gzip_enabled" class="form-select form-select-sm">
+                            <option value="true">gzip</option>
+                            <option value="false">none</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <button class="btn btn-primary btn-sm" type="submit">Сохранить</button>
+                    </div>
+                </form>
+                <small class="text-muted d-block mt-2">Логи режутся по дням, старые удаляются по retention. По умолчанию: 7 дней + gzip.</small>
+
+                <hr>
+                <h6>Log files</h6>
+                <div id="logs_viewer_section"><p class="placeholder">Загрузка логов...</p></div>
+            </div>
+        </div>
         
         <hr>
         <p class="text-center text-muted small">
@@ -293,7 +354,17 @@
             patchMcpTool: "{{ url_for('ui_api_patch_mcp_tool', server_name='SERVER_NAME_PLACEHOLDER', tool_name='TOOL_NAME_PLACEHOLDER') }}",
             addMcpCustomTool: "{{ url_for('ui_api_add_mcp_custom_tool', server_name='SERVER_NAME_PLACEHOLDER') }}",
             deleteMcpCustomTool: "{{ url_for('ui_api_delete_mcp_custom_tool', server_name='SERVER_NAME_PLACEHOLDER', tool_name='TOOL_NAME_PLACEHOLDER') }}",
-            patchMcpCustomTool: "{{ url_for('ui_api_patch_mcp_custom_tool', server_name='SERVER_NAME_PLACEHOLDER', tool_name='TOOL_NAME_PLACEHOLDER') }}"
+            patchMcpCustomTool: "{{ url_for('ui_api_patch_mcp_custom_tool', server_name='SERVER_NAME_PLACEHOLDER', tool_name='TOOL_NAME_PLACEHOLDER') }}",
+
+            getMcpAuditSettings: "{{ url_for('ui_api_get_mcp_audit_settings') }}",
+            updateMcpAuditSettings: "{{ url_for('ui_api_update_mcp_audit_settings') }}",
+            getGlobalAuditSettings: "{{ url_for('ui_api_get_global_audit_settings') }}",
+            updateGlobalAuditSettings: "{{ url_for('ui_api_update_global_audit_settings') }}",
+            listLogFiles: "{{ url_for('ui_api_list_log_files') }}",
+            downloadLogFile: "{{ url_for('ui_api_download_log_file', name='NAME_PLACEHOLDER') }}",
+            deleteLogFile: "{{ url_for('ui_api_delete_log_file', name='NAME_PLACEHOLDER') }}",
+            downloadLogFileInDay: "{{ url_for('ui_api_download_log_file_in_day', day='DAY_PLACEHOLDER', filename='FILE_PLACEHOLDER') }}",
+            deleteLogFileInDay: "{{ url_for('ui_api_delete_log_file_in_day', day='DAY_PLACEHOLDER', filename='FILE_PLACEHOLDER') }}"
         };
     </script>
     <script src="{{ url_for('static', path='js/notifications.js') }}?v={{ app_version }}" defer></script>

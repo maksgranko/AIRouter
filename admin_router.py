@@ -177,9 +177,13 @@ async def get_dashboard_data(request: Request) -> Dict[str, Any]:
         require_airouter_api_key = settings_data.get("require_airouter_api_key", False)
         force_proxy_rotation_after_request = settings_data.get("proxy_settings", {}).get("force_proxy_rotation_after_request", False)
         module_proxy_usage = settings_data.get("module_proxy_usage", {})
+        mcp_audit_settings = read_json(getattr(request.app.state, "mcp_audit_settings_file_path", "configs/mcp_audit_settings.json"), {"enabled": True, "retention_days": 7, "gzip_enabled": True})
+        global_audit_settings = read_json(getattr(request.app.state, "global_audit_settings_file_path", "configs/global_audit_settings.json"), {"enabled": True, "retention_days": 7, "gzip_enabled": True})
     except Exception as e:
         logger.exception("Error reading settings for dashboard data")
         module_proxy_usage = {}
+        mcp_audit_settings = {"enabled": True, "retention_days": 7, "gzip_enabled": True}
+        global_audit_settings = {"enabled": True, "retention_days": 7, "gzip_enabled": True}
 
     mcp_servers = mcp_manager.list_servers() if mcp_manager else []
     mcp_tools_count = 0
@@ -214,6 +218,8 @@ async def get_dashboard_data(request: Request) -> Dict[str, Any]:
         "mcp_servers": mcp_servers,
         "mcp_servers_count": len(mcp_servers),
         "mcp_tools_count": mcp_tools_count,
+        "mcp_audit_settings": mcp_audit_settings,
+        "global_audit_settings": global_audit_settings,
         "app_version": request.app.state.app_version,
         "module_proxy_usage": module_proxy_usage
     }
