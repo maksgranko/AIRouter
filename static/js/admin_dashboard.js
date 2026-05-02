@@ -1094,25 +1094,35 @@ async function loadMcpData() {
     const section = document.getElementById('mcp_management_section');
     if (!section) return;
     try {
-        const [servers, toolsResponse] = await Promise.all([
-            makeApiRequest(URLS.getMcpServers),
-            makeApiRequest(URLS.listMcpTools),
-        ]);
-        const tools = Array.isArray(toolsResponse.tools) ? toolsResponse.tools : [];
-        const grouped = {};
-        tools.forEach((t) => {
-            const server = t.mcp_server || 'unknown';
-            if (!grouped[server]) grouped[server] = [];
-            grouped[server].push(t.name || 'unknown_tool');
-        });
+        const servers = await makeApiRequest(URLS.getMcpServers);
         if (!Array.isArray(servers) || servers.length === 0) {
             section.innerHTML = '<p>Нет MCP серверов. Добавьте подключение ниже.</p>';
             return;
         }
-        section.innerHTML = servers.map((s) => {
+        const cards = await Promise.all(servers.map(async (s) => {
             const name = s.name;
             const statusText = s.enabled ? 'Enabled' : 'Disabled';
-            const toolList = (grouped[name] || []).slice(0, 8).join(', ');
+            const listUrl = URLS.listMcpServerTools.replace('SERVER_NAME_PLACEHOLDER', encodeURIComponent(name));
+            let tools = [];
+            try {
+                const toolsResp = await makeApiRequest(listUrl);
+                tools = Array.isArray(toolsResp.tools) ? toolsResp.tools : [];
+            } catch (_e) {}
+            const toolRows = tools.slice(0, 20).map((t) => {
+                const toolName = t.name || 'unknown_tool';
+                const enabled = t.enabled !== false;
+                const source = t.source || 'remote';
+                const escapedDesc = String(t.description || '').replace(/"/g, '&quot;');
+                const escapedBehavior = String(t.behavior || 'echo').replace(/"/g, '&quot;');
+                const escapedStatic = String(JSON.stringify(t.static_output || {})).replace(/"/g, '&quot;');
+                return `<li class="d-flex justify-content-between align-items-center gap-2">
+                    <span><code>${toolName}</code> <small class="text-muted">(${source})</small></span>
+                    <div class="d-flex gap-1">
+                        <button type="button" class="btn btn-sm ${enabled ? 'btn-outline-warning' : 'btn-outline-success'} mcp-tool-toggle-btn" data-server="${name}" data-tool="${toolName}" data-enabled="${enabled ? 'true' : 'false'}">${enabled ? 'Disable' : 'Enable'}</button>
+                        ${source === 'custom' ? `<button type="button" class="btn btn-sm btn-outline-secondary mcp-custom-tool-edit-btn" data-server="${name}" data-tool="${toolName}" data-description="${escapedDesc}" data-behavior="${escapedBehavior}" data-static-output="${escapedStatic}">Edit</button><button type="button" class="btn btn-sm btn-outline-danger mcp-custom-tool-delete-btn" data-server="${name}" data-tool="${toolName}">Delete</button>` : ''}
+                    </div>
+                </li>`;
+            }).join('');
             return `
                 <div class="card mb-3">
                     <div class="card-body">
@@ -1121,17 +1131,38 @@ async function loadMcpData() {
                                 <h5 class="mb-1">${name}</h5>
                                 <div class="small text-muted">${s.base_url}${s.jsonrpc_path || '/mcp'}</div>
                                 <div class="small">Policy: <code>${s.expose_policy || 'internal_only'}</code> | ${statusText}</div>
-                                <div class="small text-muted">Tools: ${toolList || 'none discovered'}</div>
+                                <div class="small text-muted">Tools: ${tools.length}</div>
                             </div>
                             <div class="d-flex gap-2">
                                 <button type="button" class="btn btn-outline-primary btn-sm mcp-test-btn" data-server="${name}">Test</button>
                                 <button type="button" class="btn btn-outline-danger btn-sm mcp-delete-btn" data-server="${name}">Delete</button>
                             </div>
                         </div>
+                        <div class="mt-2">
+                            <ul class="mb-2">${toolRows || '<li class="text-muted">No tools discovered</li>'}</ul>
+                            <details>
+                                <summary class="small">Add custom tool</summary>
+                                <form class="mcp-custom-tool-form mt-2" data-server="${name}">
+                                    <div class="row g-2">
+                                        <div class="col-md-3"><input class="form-control form-control-sm" name="name" placeholder="tool_name" required></div>
+                                        <div class="col-md-3"><input class="form-control form-control-sm" name="description" placeholder="Description"></div>
+                                        <div class="col-md-2">
+                                            <select class="form-select form-select-sm" name="behavior">
+                                                <option value="echo">echo</option>
+                                                <option value="static_json">static_json</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-md-3"><input class="form-control form-control-sm" name="static_output" placeholder='{"ok":true}'></div>
+                                        <div class="col-md-1"><button class="btn btn-sm btn-success w-100" type="submit">+</button></div>
+                                    </div>
+                                </form>
+                            </details>
+                        </div>
                     </div>
                 </div>
             `;
-        }).join('');
+        }));
+        section.innerHTML = cards.join('');
     } catch (_e) {
         section.innerHTML = '<p class="text-danger">Не удалось загрузить MCP данные.</p>';
     }
@@ -1183,7 +1214,106 @@ function attachMcpHandlers() {
                 window.showNotification('notification_area', res.message || 'MCP сервер удален');
                 await loadMcpData();
             } catch (_e) {}
+            return;
         }
+        const toggleBtn = event.target.closest('.mcp-tool-toggle-btn');
+        if (toggleBtn) {
+            const server = toggleBtn.dataset.server;
+            const tool = toggleBtn.dataset.tool;
+            const enabledNow = toggleBtn.dataset.enabled === 'true';
+            const url = URLS.patchMcpTool
+                .replace('SERVER_NAME_PLACEHOLDER', encodeURIComponent(server))
+                .replace('TOOL_NAME_PLACEHOLDER', encodeURIComponent(tool));
+            try {
+                const res = await makeApiRequest(url, 'PATCH', { enabled: !enabledNow });
+                window.showNotification('notification_area', res.message || 'Tool updated');
+                await loadMcpData();
+            } catch (_e) {}
+            return;
+        }
+        const delCustomBtn = event.target.closest('.mcp-custom-tool-delete-btn');
+        if (delCustomBtn) {
+            const server = delCustomBtn.dataset.server;
+            const tool = delCustomBtn.dataset.tool;
+            const url = URLS.deleteMcpCustomTool
+                .replace('SERVER_NAME_PLACEHOLDER', encodeURIComponent(server))
+                .replace('TOOL_NAME_PLACEHOLDER', encodeURIComponent(tool));
+            try {
+                const res = await makeApiRequest(url, 'DELETE');
+                window.showNotification('notification_area', res.message || 'Custom tool deleted');
+                await loadMcpData();
+            } catch (_e) {}
+            return;
+        }
+        const editCustomBtn = event.target.closest('.mcp-custom-tool-edit-btn');
+        if (editCustomBtn) {
+            const server = editCustomBtn.dataset.server;
+            const tool = editCustomBtn.dataset.tool;
+            const currentDesc = editCustomBtn.dataset.description || '';
+            const currentBehavior = editCustomBtn.dataset.behavior || 'echo';
+            const currentStatic = editCustomBtn.dataset.staticOutput || '{}';
+            const newDesc = window.prompt(`Description for ${tool}`, currentDesc);
+            if (newDesc === null) return;
+            const newBehavior = window.prompt(`Behavior for ${tool} (echo|static_json)`, currentBehavior);
+            if (newBehavior === null) return;
+            let staticOutput = {};
+            if (newBehavior === 'static_json') {
+                const maybeStatic = window.prompt(`static_output JSON for ${tool}`, currentStatic);
+                if (maybeStatic === null) return;
+                try {
+                    staticOutput = JSON.parse(maybeStatic);
+                } catch (_e) {
+                    window.showNotification('notification_area', 'Invalid static_output JSON', 'error');
+                    return;
+                }
+            }
+            const url = URLS.patchMcpCustomTool
+                .replace('SERVER_NAME_PLACEHOLDER', encodeURIComponent(server))
+                .replace('TOOL_NAME_PLACEHOLDER', encodeURIComponent(tool));
+            try {
+                const res = await makeApiRequest(url, 'PATCH', {
+                    description: String(newDesc || '').trim(),
+                    behavior: String(newBehavior || 'echo').trim(),
+                    static_output: staticOutput,
+                });
+                window.showNotification('notification_area', res.message || 'Custom tool updated');
+                await loadMcpData();
+            } catch (_e) {}
+            return;
+        }
+    });
+
+    section.addEventListener('submit', async (event) => {
+        const formEl = event.target.closest('.mcp-custom-tool-form');
+        if (!formEl) return;
+        event.preventDefault();
+        const server = formEl.dataset.server;
+        const formData = new FormData(formEl);
+        let staticOutput = {};
+        const staticRaw = String(formData.get('static_output') || '').trim();
+        if (staticRaw) {
+            try {
+                staticOutput = JSON.parse(staticRaw);
+            } catch (_e) {
+                window.showNotification('notification_area', 'static_output должен быть JSON', 'error');
+                return;
+            }
+        }
+        const payload = {
+            name: String(formData.get('name') || '').trim(),
+            description: String(formData.get('description') || '').trim() || 'Custom tool',
+            behavior: String(formData.get('behavior') || 'echo').trim(),
+            input_schema: { type: 'object', properties: {} },
+            static_output: staticOutput,
+            enabled: true,
+        };
+        const url = URLS.addMcpCustomTool.replace('SERVER_NAME_PLACEHOLDER', encodeURIComponent(server));
+        try {
+            const res = await makeApiRequest(url, 'POST', payload);
+            window.showNotification('notification_area', res.message || 'Custom tool saved');
+            formEl.reset();
+            await loadMcpData();
+        } catch (_e) {}
     });
 }
 

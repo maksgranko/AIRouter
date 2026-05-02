@@ -39,6 +39,27 @@ class MCPServerPatchPayload(BaseModel):
     expose_policy: Optional[str] = None
 
 
+class MCPToolTogglePayload(BaseModel):
+    enabled: bool
+
+
+class MCPCustomToolPayload(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    description: str = "Custom tool"
+    behavior: str = "echo"
+    input_schema: Dict[str, Any] = Field(default_factory=lambda: {"type": "object", "properties": {}})
+    static_output: Dict[str, Any] = Field(default_factory=dict)
+    enabled: bool = True
+
+
+class MCPCustomToolPatchPayload(BaseModel):
+    description: Optional[str] = None
+    behavior: Optional[str] = None
+    input_schema: Optional[Dict[str, Any]] = None
+    static_output: Optional[Dict[str, Any]] = None
+    enabled: Optional[bool] = None
+
+
 @router.get("/servers", name="ui_api_get_mcp_servers")
 async def ui_api_get_mcp_servers(request: Request, username: str = Depends(get_current_username)):
     mcp_manager = request.app.state.mcp_manager
@@ -94,3 +115,47 @@ async def ui_api_list_mcp_tools(request: Request, username: str = Depends(get_cu
     mcp_manager = request.app.state.mcp_manager
     tools = await mcp_manager.list_all_tools()
     return {"tools": tools}
+
+
+@router.get("/servers/{server_name}/tools", name="ui_api_list_mcp_server_tools")
+async def ui_api_list_mcp_server_tools(server_name: str, request: Request, username: str = Depends(get_current_username)):
+    mcp_manager = request.app.state.mcp_manager
+    tools = await mcp_manager.list_server_tools(server_name)
+    return {"tools": tools}
+
+
+@router.patch("/servers/{server_name}/tools/{tool_name}", name="ui_api_patch_mcp_tool")
+async def ui_api_patch_mcp_tool(server_name: str, tool_name: str, payload: MCPToolTogglePayload, request: Request, username: str = Depends(get_current_username)):
+    mcp_manager = request.app.state.mcp_manager
+    updated = mcp_manager.set_tool_enabled(server_name, tool_name, payload.enabled)
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"MCP server '{server_name}' not found")
+    return {"status": "success", "message": f"Tool '{tool_name}' enabled={payload.enabled}"}
+
+
+@router.post("/servers/{server_name}/custom-tools", name="ui_api_add_mcp_custom_tool")
+async def ui_api_add_mcp_custom_tool(server_name: str, payload: MCPCustomToolPayload, request: Request, username: str = Depends(get_current_username)):
+    mcp_manager = request.app.state.mcp_manager
+    added = mcp_manager.add_custom_tool(server_name, payload.model_dump())
+    if not added:
+        raise HTTPException(status_code=404, detail=f"MCP server '{server_name}' not found")
+    return {"status": "success", "message": f"Custom tool '{payload.name}' saved"}
+
+
+@router.delete("/servers/{server_name}/custom-tools/{tool_name}", name="ui_api_delete_mcp_custom_tool")
+async def ui_api_delete_mcp_custom_tool(server_name: str, tool_name: str, request: Request, username: str = Depends(get_current_username)):
+    mcp_manager = request.app.state.mcp_manager
+    deleted = mcp_manager.delete_custom_tool(server_name, tool_name)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"MCP server '{server_name}' not found")
+    return {"status": "success", "message": f"Custom tool '{tool_name}' deleted"}
+
+
+@router.patch("/servers/{server_name}/custom-tools/{tool_name}", name="ui_api_patch_mcp_custom_tool")
+async def ui_api_patch_mcp_custom_tool(server_name: str, tool_name: str, payload: MCPCustomToolPatchPayload, request: Request, username: str = Depends(get_current_username)):
+    mcp_manager = request.app.state.mcp_manager
+    patch = payload.model_dump(exclude_none=True)
+    updated = mcp_manager.update_custom_tool(server_name, tool_name, patch)
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"MCP server '{server_name}' or custom tool '{tool_name}' not found")
+    return {"status": "success", "message": f"Custom tool '{tool_name}' updated"}

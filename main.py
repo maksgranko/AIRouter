@@ -57,6 +57,7 @@ AIROUTER_KEYS_FILE = os.path.join(CONFIG_DIR, "airouter_api_keys.json")
 PROXIES_FILE = os.path.join(CONFIG_DIR, "proxies.json")
 OPENAI_INSTANCES_FILE = os.path.join(CONFIG_DIR, "openai_instances.json")
 MCP_SERVERS_FILE = os.path.join(CONFIG_DIR, "mcp_servers.json")
+MCP_AUDIT_LOG_FILE = os.path.join(CONFIG_DIR, "mcp_audit.log")
 
 def ensure_config_files_exist():
     """Проверяет/нормализует файлы конфигурации и заполняет отсутствующие значения по умолчанию."""
@@ -260,7 +261,7 @@ app.state.module_registry = registry
 app.state.airouter_key_manager = airouter_key_manager
 app.state.settings_file_path = SETTINGS_FILE
 app.state.app_version = APP_VERSION
-app.state.mcp_manager = MCPClientManager(MCP_SERVERS_FILE)
+app.state.mcp_manager = MCPClientManager(MCP_SERVERS_FILE, audit_log_path=MCP_AUDIT_LOG_FILE)
 
 normalize_module_statuses_for_availability(registry)
 _register_available_modules(registry, key_manager, proxy_manager, openai_instances_config)
@@ -291,7 +292,7 @@ def reload_runtime_modules() -> dict:
     app.state.proxy_manager = proxy_manager
     app.state.module_registry = registry
     app.state.airouter_key_manager = airouter_key_manager
-    app.state.mcp_manager = MCPClientManager(MCP_SERVERS_FILE)
+    app.state.mcp_manager = MCPClientManager(MCP_SERVERS_FILE, audit_log_path=MCP_AUDIT_LOG_FILE)
 
     return {
         "registered_modules": list(registry.get_all_module_statuses().keys()),
@@ -379,6 +380,8 @@ app.include_router(mcp_api.router)
 
 from api.airouter import openai_compatible
 app.include_router(openai_compatible.router)
+from api.mcp import facade_api
+app.include_router(facade_api.router)
 
 @app.get("/favicon.ico", include_in_schema=False)
 async def favicon():

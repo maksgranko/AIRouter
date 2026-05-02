@@ -288,7 +288,12 @@
             patchMcpServer: "{{ url_for('ui_api_patch_mcp_server', server_name='SERVER_NAME_PLACEHOLDER') }}",
             deleteMcpServer: "{{ url_for('ui_api_delete_mcp_server', server_name='SERVER_NAME_PLACEHOLDER') }}",
             testMcpServer: "{{ url_for('ui_api_test_mcp_server', server_name='SERVER_NAME_PLACEHOLDER') }}",
-            listMcpTools: "{{ url_for('ui_api_list_mcp_tools') }}"
+            listMcpTools: "{{ url_for('ui_api_list_mcp_tools') }}",
+            listMcpServerTools: "{{ url_for('ui_api_list_mcp_server_tools', server_name='SERVER_NAME_PLACEHOLDER') }}",
+            patchMcpTool: "{{ url_for('ui_api_patch_mcp_tool', server_name='SERVER_NAME_PLACEHOLDER', tool_name='TOOL_NAME_PLACEHOLDER') }}",
+            addMcpCustomTool: "{{ url_for('ui_api_add_mcp_custom_tool', server_name='SERVER_NAME_PLACEHOLDER') }}",
+            deleteMcpCustomTool: "{{ url_for('ui_api_delete_mcp_custom_tool', server_name='SERVER_NAME_PLACEHOLDER', tool_name='TOOL_NAME_PLACEHOLDER') }}",
+            patchMcpCustomTool: "{{ url_for('ui_api_patch_mcp_custom_tool', server_name='SERVER_NAME_PLACEHOLDER', tool_name='TOOL_NAME_PLACEHOLDER') }}"
         };
     </script>
     <script src="{{ url_for('static', path='js/notifications.js') }}?v={{ app_version }}" defer></script>

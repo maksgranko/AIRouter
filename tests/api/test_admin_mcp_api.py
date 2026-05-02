@@ -56,3 +56,51 @@ async def test_mcp_server_test_endpoint(async_client, admin_basic_auth_header, m
     )
     assert response.status_code == 200
     assert response.json()["ok"] is True
+
+
+async def test_mcp_tool_toggle_and_custom_tool(async_client, admin_basic_auth_header, app_module):
+    mcp_manager = app_module.app.state.mcp_manager
+    mcp_manager.save_servers([
+        {
+            "name": "mcp-tools",
+            "base_url": "https://mcp.example.com",
+            "jsonrpc_path": "/mcp",
+            "enabled": True,
+            "disabled_tools": [],
+            "custom_tools": [],
+        }
+    ])
+
+    toggle_resp = await async_client.patch(
+        "/api/admin/ui/mcp/servers/mcp-tools/tools/weather.get",
+        json={"enabled": False},
+        headers=admin_basic_auth_header,
+    )
+    assert toggle_resp.status_code == 200
+
+    add_custom = await async_client.post(
+        "/api/admin/ui/mcp/servers/mcp-tools/custom-tools",
+        json={
+            "name": "custom.echo",
+            "description": "echo",
+            "behavior": "echo",
+            "input_schema": {"type": "object", "properties": {}},
+            "static_output": {},
+            "enabled": True,
+        },
+        headers=admin_basic_auth_header,
+    )
+    assert add_custom.status_code == 200
+
+    patch_custom = await async_client.patch(
+        "/api/admin/ui/mcp/servers/mcp-tools/custom-tools/custom.echo",
+        json={"description": "edited", "behavior": "static_json", "static_output": {"ok": True}},
+        headers=admin_basic_auth_header,
+    )
+    assert patch_custom.status_code == 200
+
+    delete_custom = await async_client.delete(
+        "/api/admin/ui/mcp/servers/mcp-tools/custom-tools/custom.echo",
+        headers=admin_basic_auth_header,
+    )
+    assert delete_custom.status_code == 200

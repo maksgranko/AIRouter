@@ -1024,7 +1024,11 @@ class OpenAICompatModule(BaseModule):
                     arguments = {"raw": arguments}
                 call_id = tool_call.get("id") or tool_call.get("call_id") or tool_name or "tool_call"
                 try:
-                    tool_result = await mcp_manager.call_tool(tool_name, arguments)
+                    tool_result = await mcp_manager.call_tool(
+                        tool_name,
+                        arguments,
+                        audit_context={"origin": "oaic.responses", "instance": instance_name},
+                    )
                 except Exception as exc:
                     tool_result = {"error": str(exc)}
                 tool_messages.append({
@@ -1171,7 +1175,11 @@ class OpenAICompatModule(BaseModule):
             tool_outputs = []
             for tool_call in tool_calls:
                 try:
-                    result = await mcp_manager.call_tool(tool_call["name"], tool_call.get("arguments") or {})
+                    result = await mcp_manager.call_tool(
+                        tool_call["name"],
+                        tool_call.get("arguments") or {},
+                        audit_context={"origin": "oaic.responses_stream", "instance": instance_name},
+                    )
                 except Exception as exc:
                     result = {"error": str(exc)}
                 tool_outputs.append(
