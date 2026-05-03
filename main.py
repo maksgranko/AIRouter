@@ -20,6 +20,8 @@ from modules.global_audit_logger import GlobalAuditLogger
 import admin_router
 import logging
 import time
+import traceback
+from uuid import uuid4
 
 open_browser_on_save = False
 logging_type = logging.INFO
@@ -368,6 +370,8 @@ app.state.reload_runtime_modules = reload_runtime_modules
 @app.middleware("http")
 async def check_airouter_api_key(request: Request, call_next):
     start = time.perf_counter()
+    request_id = str(uuid4())
+    request.state.request_id = request_id
     body_model_name = None
     try:
         content_type = request.headers.get("content-type", "")
@@ -417,6 +421,27 @@ async def check_airouter_api_key(request: Request, call_next):
                 "latency_ms": latency_ms,
                 "client": request.client.host if request.client else "unknown",
                 "module_name": _resolve_module_name(),
+                "request_id": request_id,
+            }
+        )
+
+    def _audit_error(exc: Exception):
+        logger_obj = getattr(app.state, "global_audit_logger", None)
+        if not logger_obj:
+            return
+        latency_ms = int((time.perf_counter() - start) * 1000)
+        logger_obj.log_event(
+            {
+                "path": request.url.path,
+                "method": request.method,
+                "status_code": 500,
+                "latency_ms": latency_ms,
+                "client": request.client.host if request.client else "unknown",
+                "module_name": _resolve_module_name(),
+                "request_id": request_id,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "traceback": traceback.format_exc(),
             }
         )
 
@@ -424,9 +449,14 @@ async def check_airouter_api_key(request: Request, call_next):
        request.url.path.startswith("/static") or \
        request.url.path.startswith("/admin") or \
        request.url.path.startswith("/api/admin/"):
-        response = await call_next(request)
-        _audit(response.status_code)
-        return response
+        try:
+            response = await call_next(request)
+            response.headers["X-Request-Id"] = request_id
+            _audit(response.status_code)
+            return response
+        except Exception as exc:
+            _audit_error(exc)
+            raise
 
     try:
         with open(app.state.settings_file_path, 'r') as f:
@@ -473,9 +503,14 @@ async def check_airouter_api_key(request: Request, call_next):
             )
         logger.debug(f"Valid API Key received for {request.url.path}")
 
-    response = await call_next(request)
-    _audit(response.status_code)
-    return response
+    try:
+        response = await call_next(request)
+        response.headers["X-Request-Id"] = request_id
+        _audit(response.status_code)
+        return response
+    except Exception as exc:
+        _audit_error(exc)
+        raise
 
 try:
     if(open_browser_on_save): 

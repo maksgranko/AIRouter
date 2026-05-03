@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import gzip
+import traceback
 
 import httpx
 
@@ -68,6 +69,52 @@ class MCPClientManager:
                     all_tools.append(merged)
         return all_tools
 
+    async def list_all_resources(self) -> List[Dict[str, Any]]:
+        resources: List[Dict[str, Any]] = []
+        for server in self.list_servers():
+            if not server.get("enabled", True):
+                continue
+            server_name = server.get("name")
+            if not server_name:
+                continue
+            payload = {"jsonrpc": "2.0", "id": "list-resources", "method": "resources/list", "params": {}}
+            try:
+                response = await self._post_jsonrpc(server, payload)
+                result = response.get("result", {}) if isinstance(response, dict) else {}
+                rows = result.get("resources", []) if isinstance(result, dict) else []
+                if isinstance(rows, list):
+                    for item in rows:
+                        if isinstance(item, dict):
+                            merged = dict(item)
+                            merged["mcp_server"] = server_name
+                            resources.append(merged)
+            except Exception:
+                continue
+        return resources
+
+    async def list_all_prompts(self) -> List[Dict[str, Any]]:
+        prompts: List[Dict[str, Any]] = []
+        for server in self.list_servers():
+            if not server.get("enabled", True):
+                continue
+            server_name = server.get("name")
+            if not server_name:
+                continue
+            payload = {"jsonrpc": "2.0", "id": "list-prompts", "method": "prompts/list", "params": {}}
+            try:
+                response = await self._post_jsonrpc(server, payload)
+                result = response.get("result", {}) if isinstance(response, dict) else {}
+                rows = result.get("prompts", []) if isinstance(result, dict) else []
+                if isinstance(rows, list):
+                    for item in rows:
+                        if isinstance(item, dict):
+                            merged = dict(item)
+                            merged["mcp_server"] = server_name
+                            prompts.append(merged)
+            except Exception:
+                continue
+        return prompts
+
     async def list_server_tools(self, server_name: str) -> List[Dict[str, Any]]:
         return await self.list_tools(server_name)
 
@@ -127,9 +174,30 @@ class MCPClientManager:
                     return response["result"]
                 if isinstance(response, dict) and "error" in response:
                     last_error = str(response["error"])
+                    self._append_audit_event(
+                        {
+                            "tool": tool_name,
+                            "server": server.get("name"),
+                            "source": "remote",
+                            "ok": False,
+                            "error": last_error,
+                            "context": audit_context or {},
+                        }
+                    )
                     continue
             except Exception as exc:
                 last_error = str(exc)
+                self._append_audit_event(
+                    {
+                        "tool": tool_name,
+                        "server": server.get("name"),
+                        "source": "remote",
+                        "ok": False,
+                        "error": last_error,
+                        "traceback": traceback.format_exc(),
+                        "context": audit_context or {},
+                    }
+                )
                 continue
         self._append_audit_event(
             {
@@ -317,7 +385,8 @@ class MCPClientManager:
             day_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
             day_dir = os.path.join(base_dir, day_str)
             os.makedirs(day_dir, exist_ok=True)
-            daily_path = os.path.join(day_dir, "mcp.log")
+            server_name = self._sanitize_module_name(str(payload.get("server") or "unknown")) or "unknown"
+            daily_path = os.path.join(day_dir, f"mcp.{server_name}.log")
             with open(daily_path, "a", encoding="utf-8") as f:
                 f.write(json.dumps(event, ensure_ascii=False) + "\n")
 
@@ -388,3 +457,16 @@ class MCPClientManager:
             return False
         y, m, d = value.split("-")
         return y.isdigit() and m.isdigit() and d.isdigit()
+
+    @staticmethod
+    def _sanitize_module_name(value: str) -> str:
+        if not value:
+            return ""
+        safe = []
+        for ch in value:
+            if ch.isalnum() or ch in "._-":
+                safe.append(ch)
+            else:
+                safe.append("_")
+        normalized = "".join(safe).strip("._-")
+        return normalized[:120]

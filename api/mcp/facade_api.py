@@ -1,6 +1,7 @@
 from typing import Any, Dict
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import Response
 
 
 router = APIRouter(tags=["mcp_facade"])
@@ -11,7 +12,7 @@ def _jsonrpc_ok(result: Dict[str, Any], request_id: Any):
 
 
 def _jsonrpc_err(code: int, message: str, request_id: Any):
-    return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
+    return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message, "data": {}}}
 
 
 @router.post("/mcp")
@@ -22,6 +23,7 @@ async def mcp_facade_endpoint(request: Request):
 
     method = body.get("method")
     request_id = body.get("id")
+    is_notification = request_id is None
     params = body.get("params") or {}
     if not isinstance(params, dict):
         params = {}
@@ -32,14 +34,15 @@ async def mcp_facade_endpoint(request: Request):
 
     try:
         if method == "initialize":
-            return _jsonrpc_ok(
+            result = _jsonrpc_ok(
                 {
                     "protocolVersion": "2024-11-05",
                     "serverInfo": {"name": "AIRouter MCP Facade", "version": request.app.state.app_version},
-                    "capabilities": {"tools": {}},
+                    "capabilities": {"tools": {}, "resources": {}, "prompts": {}},
                 },
                 request_id,
             )
+            return Response(status_code=204) if is_notification else result
 
         if method == "tools/list":
             tools = await mcp_manager.list_all_tools()
@@ -58,7 +61,18 @@ async def mcp_facade_endpoint(request: Request):
                         "source": tool.get("source", "remote"),
                     }
                 )
-            return _jsonrpc_ok({"tools": public_tools}, request_id)
+            result = _jsonrpc_ok({"tools": public_tools}, request_id)
+            return Response(status_code=204) if is_notification else result
+
+        if method == "resources/list":
+            resources = await mcp_manager.list_all_resources()
+            result = _jsonrpc_ok({"resources": resources}, request_id)
+            return Response(status_code=204) if is_notification else result
+
+        if method == "prompts/list":
+            prompts = await mcp_manager.list_all_prompts()
+            result = _jsonrpc_ok({"prompts": prompts}, request_id)
+            return Response(status_code=204) if is_notification else result
 
         if method == "tools/call":
             tool_name = str(params.get("name", "")).strip()
@@ -75,7 +89,8 @@ async def mcp_facade_endpoint(request: Request):
                 preferred_server=preferred_server,
                 audit_context={"origin": "mcp.facade", "client": client_host},
             )
-            return _jsonrpc_ok(result if isinstance(result, dict) else {"output": result}, request_id)
+            payload_result = _jsonrpc_ok(result if isinstance(result, dict) else {"output": result}, request_id)
+            return Response(status_code=204) if is_notification else payload_result
 
         return _jsonrpc_err(-32601, f"Method not found: {method}", request_id)
     except HTTPException as e:
